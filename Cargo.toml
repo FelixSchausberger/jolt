@@ -29,9 +29,6 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[build-dependencies]
-# For linking IOKit framework
-
 [profile.release]
 lto = true
 codegen-units = 1
