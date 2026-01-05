@@ -25,7 +25,7 @@ Built for MacBook users who want to understand what's draining their battery. Pr
 ### From Source
 
 ```bash
-git clone https://github.com/jordon/jolt.git
+git clone https://github.com/jordond/jolt.git
 cd jolt
 cargo build --release
 ./target/release/jolt
@@ -43,7 +43,7 @@ jolt
 
 ```bash
 # Future release
-brew install jordon/tap/jolt
+brew install jordond/tap/jolt
 ```
 
 ## Usage
@@ -67,25 +67,25 @@ jolt --help
 
 ### CLI Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-r, --refresh-ms` | 1000 | Refresh interval in milliseconds |
-| `-t, --theme` | auto | Theme mode: `auto`, `dark`, or `light` |
+| Option             | Default | Description                            |
+| ------------------ | ------- | -------------------------------------- |
+| `-r, --refresh-ms` | 1000    | Refresh interval in milliseconds       |
+| `-t, --theme`      | auto    | Theme mode: `auto`, `dark`, or `light` |
 
 ## Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `Up` / `k` | Move selection up |
-| `Down` / `j` | Move selection down |
-| `Enter` / `Space` | Expand/collapse process group |
-| `K` | Kill selected process |
-| `g` | Toggle graph metric (battery/power) |
-| `t` | Cycle theme (Auto/Dark/Light) |
-| `PgUp` / `PgDn` | Page up/down |
-| `Home` / `End` | Jump to start/end |
-| `h` / `?` | Show help dialog |
-| `q` / `Esc` | Quit |
+| Key               | Action                              |
+| ----------------- | ----------------------------------- |
+| `Up` / `k`        | Move selection up                   |
+| `Down` / `j`      | Move selection down                 |
+| `Enter` / `Space` | Expand/collapse process group       |
+| `K`               | Kill selected process               |
+| `g`               | Toggle graph metric (battery/power) |
+| `t`               | Cycle theme (Auto/Dark/Light)       |
+| `PgUp` / `PgDn`   | Page up/down                        |
+| `Home` / `End`    | Jump to start/end                   |
+| `h` / `?`         | Show help dialog                    |
+| `q` / `Esc`       | Quit                                |
 
 ## Screenshots
 
@@ -96,6 +96,7 @@ jolt --help
 ### Prerequisites
 
 1. Install Rust via [rustup](https://rustup.rs/):
+
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
@@ -109,7 +110,7 @@ jolt --help
 
 ```bash
 # Clone the repository
-git clone https://github.com/jordon/jolt.git
+git clone https://github.com/jordond/jolt.git
 cd jolt
 
 # Debug build (faster compilation, slower runtime)
@@ -154,35 +155,6 @@ cargo clippy
    ```bash
    cargo publish
    ```
-
-### Homebrew Formula
-
-Create a formula at `Formula/jolt.rb`:
-
-```ruby
-class Jolt < Formula
-  desc "Beautiful TUI battery and energy monitor for macOS"
-  homepage "https://github.com/jordon/jolt"
-  url "https://github.com/jordon/jolt/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "YOUR_SHA256_HERE"
-  license "MIT"
-
-  depends_on "rust" => :build
-
-  def install
-    system "cargo", "install", *std_cargo_args
-  end
-
-  test do
-    assert_match "jolt", shell_output("#{bin}/jolt --version")
-  end
-end
-```
-
-To create a tap:
-1. Create a repo named `homebrew-tap`
-2. Add the formula
-3. Users install via `brew install jordon/tap/jolt`
 
 ## How it Works
 

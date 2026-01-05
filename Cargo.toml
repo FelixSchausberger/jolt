@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Jordon"]
 description = "A beautiful TUI for monitoring battery and energy usage on macOS"
 license = "MIT"
-repository = "https://github.com/jordon/jolt"
+repository = "https://github.com/jordond/jolt"
 keywords = ["tui", "battery", "macos", "energy", "monitoring"]
 categories = ["command-line-utilities"]
 
