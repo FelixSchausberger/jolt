@@ -1,17 +1,28 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
 use crate::app::App;
 use crate::config::Theme;
 use crate::input::KEY_BINDINGS;
+use crate::ui::VERSION;
+
+fn centered_fixed_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width.saturating_sub(4));
+    let height = height.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
+}
 
 pub fn render_help(frame: &mut Frame, app: &App, theme: &Theme) {
-    let area = super::centered_rect(frame.size(), 60, 70);
+    let content_height = KEY_BINDINGS.len() as u16 + 8;
+    let content_width = 55;
+    let area = centered_fixed_rect(frame.size(), content_width, content_height);
 
     frame.render_widget(Clear, area);
 
@@ -27,21 +38,18 @@ pub fn render_help(frame: &mut Frame, app: &App, theme: &Theme) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(1)])
-        .margin(1)
+        .margin(2)
         .split(inner);
 
     let title = Paragraph::new(vec![
         Line::from(vec![Span::styled(
-            "⚡ jolt - Battery & Energy Monitor",
+            "jolt - Battery & Energy Monitor",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from(vec![Span::styled(
-            format!(
-                "Theme: {} (press 't' to change)",
-                app.config.theme_mode_label()
-            ),
+            format!("Theme: {}", app.config.theme_mode_label()),
             Style::default().fg(theme.muted),
         )]),
     ])
@@ -54,7 +62,7 @@ pub fn render_help(frame: &mut Frame, app: &App, theme: &Theme) {
         .map(|binding| {
             Line::from(vec![
                 Span::styled(
-                    format!("{:14}", binding.key),
+                    format!("{:15}", binding.key),
                     Style::default()
                         .fg(theme.highlight)
                         .add_modifier(Modifier::BOLD),
@@ -64,13 +72,13 @@ pub fn render_help(frame: &mut Frame, app: &App, theme: &Theme) {
         })
         .collect();
 
-    let help_text = Paragraph::new(lines).wrap(Wrap { trim: true });
+    let help_text = Paragraph::new(lines);
 
     frame.render_widget(help_text, chunks[1]);
 }
 
 pub fn render_kill_confirm(frame: &mut Frame, app: &App, theme: &Theme) {
-    let area = super::centered_rect(frame.size(), 50, 40);
+    let area = centered_fixed_rect(frame.size(), 50, 14);
 
     frame.render_widget(Clear, area);
 
@@ -82,6 +90,12 @@ pub fn render_kill_confirm(frame: &mut Frame, app: &App, theme: &Theme) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    let padded = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0)])
+        .margin(1)
+        .split(inner)[0];
 
     let content = if let Some(process) = app.process_to_kill() {
         vec![
@@ -140,5 +154,73 @@ pub fn render_kill_confirm(frame: &mut Frame, app: &App, theme: &Theme) {
 
     let paragraph = Paragraph::new(content).centered();
 
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, padded);
+}
+
+pub fn render_about(frame: &mut Frame, _app: &App, theme: &Theme) {
+    let area = centered_fixed_rect(frame.size(), 60, 16);
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" About ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let padded = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0)])
+        .margin(1)
+        .split(inner)[0];
+
+    let content = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            format!("jolt v{}", VERSION),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "A terminal-based battery and energy monitor",
+            Style::default().fg(theme.fg),
+        )]),
+        Line::from(vec![Span::styled(
+            "for macOS Apple Silicon Macs.",
+            Style::default().fg(theme.fg),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Track power consumption, battery health,",
+            Style::default().fg(theme.muted),
+        )]),
+        Line::from(vec![Span::styled(
+            "and identify energy-hungry processes.",
+            Style::default().fg(theme.muted),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("GitHub: ", Style::default().fg(theme.muted)),
+            Span::styled(
+                "https://github.com/jordond/jolt",
+                Style::default()
+                    .fg(theme.highlight)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Press 'a' or Esc to close",
+            Style::default().fg(theme.muted),
+        )]),
+    ];
+
+    let paragraph = Paragraph::new(content).centered();
+
+    frame.render_widget(paragraph, padded);
 }

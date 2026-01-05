@@ -7,7 +7,9 @@ use core_foundation_sys::dictionary::{
 use core_foundation_sys::string::{
     kCFStringEncodingUTF8, CFStringCreateWithBytesNoCopy, CFStringGetCString, CFStringRef,
 };
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::size_of;
 use std::process::Command;
 use std::ptr::null;
 use std::time::{Duration, Instant};
@@ -45,6 +47,7 @@ extern "C" {
         c: *const c_void,
     ) -> CFDictionaryRef;
 
+    fn IOReportChannelGetGroup(a: CFDictionaryRef) -> CFStringRef;
     fn IOReportChannelGetChannelName(a: CFDictionaryRef) -> CFStringRef;
     fn IOReportChannelGetUnitLabel(a: CFDictionaryRef) -> CFStringRef;
     fn IOReportSimpleGetIntegerValue(a: CFDictionaryRef, b: i32) -> i64;
@@ -53,6 +56,187 @@ extern "C" {
 extern "C" {
     fn CFArrayGetCount(arr: CFArrayRef) -> isize;
     fn CFArrayGetValueAtIndex(arr: CFArrayRef, idx: isize) -> *const c_void;
+}
+
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOServiceMatching(name: *const i8) -> CFMutableDictionaryRef;
+    fn IOServiceGetMatchingServices(
+        mainPort: u32,
+        matching: CFDictionaryRef,
+        existing: *mut u32,
+    ) -> i32;
+    fn IOIteratorNext(iterator: u32) -> u32;
+    fn IORegistryEntryGetName(entry: u32, name: *mut i8) -> i32;
+    fn IOServiceOpen(device: u32, a: u32, b: u32, c: *mut u32) -> i32;
+    fn IOServiceClose(conn: u32) -> i32;
+    fn IOObjectRelease(obj: u32) -> u32;
+    fn IOConnectCallStructMethod(
+        conn: u32,
+        selector: u32,
+        ival: *const c_void,
+        isize: usize,
+        oval: *mut c_void,
+        osize: *mut usize,
+    ) -> i32;
+    fn mach_task_self() -> u32;
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct KeyDataVer {
+    major: u8,
+    minor: u8,
+    build: u8,
+    reserved: u8,
+    release: u16,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct PLimitData {
+    version: u16,
+    length: u16,
+    cpu_p_limit: u32,
+    gpu_p_limit: u32,
+    mem_p_limit: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+struct KeyInfo {
+    data_size: u32,
+    data_type: u32,
+    data_attributes: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct KeyData {
+    key: u32,
+    vers: KeyDataVer,
+    p_limit_data: PLimitData,
+    key_info: KeyInfo,
+    result: u8,
+    status: u8,
+    data8: u8,
+    data32: u32,
+    bytes: [u8; 32],
+}
+
+struct SMC {
+    conn: u32,
+    keys: HashMap<u32, KeyInfo>,
+}
+
+impl SMC {
+    fn new() -> Option<Self> {
+        let service_name = std::ffi::CString::new("AppleSMC").ok()?;
+
+        unsafe {
+            let service = IOServiceMatching(service_name.as_ptr());
+            let mut existing = 0u32;
+            if IOServiceGetMatchingServices(0, service, &mut existing) != 0 {
+                return None;
+            }
+
+            let mut conn = 0u32;
+            loop {
+                let device = IOIteratorNext(existing);
+                if device == 0 {
+                    break;
+                }
+
+                let mut name = [0i8; 128];
+                if IORegistryEntryGetName(device, name.as_mut_ptr()) == 0 {
+                    let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
+                        .to_string_lossy()
+                        .to_string();
+                    if name_str == "AppleSMCKeysEndpoint" {
+                        if IOServiceOpen(device, mach_task_self(), 0, &mut conn) == 0 {
+                            IOObjectRelease(existing);
+                            return Some(Self {
+                                conn,
+                                keys: HashMap::new(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            IOObjectRelease(existing);
+            None
+        }
+    }
+
+    fn read(&self, input: &KeyData) -> Option<KeyData> {
+        let ival = input as *const _ as _;
+        let ilen = size_of::<KeyData>();
+        let mut oval = KeyData::default();
+        let mut olen = size_of::<KeyData>();
+
+        let rs = unsafe {
+            IOConnectCallStructMethod(self.conn, 2, ival, ilen, &mut oval as *mut _ as _, &mut olen)
+        };
+
+        if rs != 0 || oval.result != 0 {
+            return None;
+        }
+
+        Some(oval)
+    }
+
+    fn read_key_info(&mut self, key: &str) -> Option<KeyInfo> {
+        if key.len() != 4 {
+            return None;
+        }
+
+        let key_fourcc = key.bytes().fold(0u32, |acc, x| (acc << 8) + x as u32);
+        if let Some(ki) = self.keys.get(&key_fourcc) {
+            return Some(*ki);
+        }
+
+        let ival = KeyData {
+            data8: 9,
+            key: key_fourcc,
+            ..Default::default()
+        };
+        let oval = self.read(&ival)?;
+        self.keys.insert(key_fourcc, oval.key_info);
+        Some(oval.key_info)
+    }
+
+    fn read_val(&mut self, key: &str) -> Option<Vec<u8>> {
+        let key_info = self.read_key_info(key)?;
+        let key_fourcc = key.bytes().fold(0u32, |acc, x| (acc << 8) + x as u32);
+
+        let ival = KeyData {
+            data8: 5,
+            key: key_fourcc,
+            key_info,
+            ..Default::default()
+        };
+        let oval = self.read(&ival)?;
+
+        Some(oval.bytes[0..key_info.data_size as usize].to_vec())
+    }
+
+    fn read_system_power(&mut self) -> Option<f32> {
+        let data = self.read_val("PSTR")?;
+        if data.len() >= 4 {
+            Some(f32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for SMC {
+    fn drop(&mut self) {
+        unsafe {
+            IOServiceClose(self.conn);
+        }
+    }
 }
 
 fn cfstr(val: &str) -> CFStringRef {
@@ -133,7 +317,8 @@ impl Drop for IOReportIterator {
 }
 
 struct ChannelData {
-    name: String,
+    group: String,
+    channel: String,
     unit: String,
     value: i64,
 }
@@ -154,13 +339,19 @@ impl Iterator for IOReportIterator {
             return self.next();
         }
 
-        let name = from_cfstr(unsafe { IOReportChannelGetChannelName(item) });
+        let group = from_cfstr(unsafe { IOReportChannelGetGroup(item) });
+        let channel = from_cfstr(unsafe { IOReportChannelGetChannelName(item) });
         let unit = from_cfstr(unsafe { IOReportChannelGetUnitLabel(item) })
             .trim()
             .to_string();
         let value = unsafe { IOReportSimpleGetIntegerValue(item, 0) };
 
-        Some(ChannelData { name, unit, value })
+        Some(ChannelData {
+            group,
+            channel,
+            unit,
+            value,
+        })
     }
 }
 
@@ -230,40 +421,69 @@ impl Drop for IOReportSubscription {
 
 pub struct PowerData {
     subscription: Option<IOReportSubscription>,
+    smc: Option<SMC>,
     last_sample: Option<CFDictionaryRef>,
     last_sample_time: Option<Instant>,
     cpu_power: f32,
     gpu_power: f32,
     ane_power: f32,
-    total_system_power: f32,
+    package_power: f32,
+    system_power: f32,
     power_mode: PowerMode,
 }
 
 impl PowerData {
     pub fn new() -> Result<Self> {
         let subscription = IOReportSubscription::new();
-        let last_sample = subscription.as_ref().and_then(|s| s.sample());
-        let last_sample_time = last_sample.map(|_| Instant::now());
+        let smc = SMC::new();
 
         let mut data = Self {
             subscription,
-            last_sample,
-            last_sample_time,
+            smc,
+            last_sample: None,
+            last_sample_time: None,
             cpu_power: 0.0,
             gpu_power: 0.0,
             ane_power: 0.0,
-            total_system_power: 0.0,
+            package_power: 0.0,
+            system_power: 0.0,
             power_mode: PowerMode::Unknown,
         };
 
+        if let Some(ref sub) = data.subscription {
+            if let Some(sample1) = sub.sample() {
+                std::thread::sleep(Duration::from_millis(100));
+                if let Some(sample2) = sub.sample() {
+                    let elapsed = Duration::from_millis(100);
+                    data.calculate_power_from_delta(sample1, sample2, elapsed);
+                    data.last_sample = Some(sample2);
+                    data.last_sample_time = Some(Instant::now());
+                } else {
+                    unsafe { CFRelease(sample1 as _) };
+                }
+            }
+        }
+
+        data.refresh_system_power();
         data.refresh_power_mode();
         Ok(data)
     }
 
     pub fn refresh(&mut self) -> Result<()> {
         self.refresh_power_metrics();
+        self.refresh_system_power();
         self.refresh_power_mode();
         Ok(())
+    }
+
+    fn refresh_system_power(&mut self) {
+        if let Some(ref mut smc) = self.smc {
+            if let Some(power) = smc.read_system_power() {
+                self.system_power = power.max(self.package_power);
+                return;
+            }
+        }
+        self.system_power = self.package_power;
     }
 
     fn refresh_power_metrics(&mut self) {
@@ -307,30 +527,52 @@ impl PowerData {
             return;
         }
 
-        let mut cpu_energy: f64 = 0.0;
-        let mut gpu_energy: f64 = 0.0;
-        let mut ane_energy: f64 = 0.0;
+        let elapsed_ms = elapsed.as_millis() as u64;
+        if elapsed_ms == 0 {
+            unsafe { CFRelease(delta as _) };
+            return;
+        }
+
+        let mut cpu_power: f32 = 0.0;
+        let mut gpu_power: f32 = 0.0;
+        let mut ane_power: f32 = 0.0;
+        let mut other_power: f32 = 0.0;
 
         if let Some(iter) = IOReportIterator::new(delta) {
-            for channel in iter {
-                let joules = energy_to_joules(channel.value, &channel.unit);
-                let name = channel.name.to_lowercase();
+            for ch in iter {
+                if ch.group != "Energy Model" {
+                    continue;
+                }
 
-                if name.contains("cpu") && !name.contains("gpu") {
-                    cpu_energy += joules;
-                } else if name.contains("gpu") {
-                    gpu_energy += joules;
-                } else if name.contains("ane") {
-                    ane_energy += joules;
+                let watts = match energy_to_watts(ch.value, &ch.unit, elapsed_ms) {
+                    Some(w) => w,
+                    None => continue,
+                };
+
+                let channel_lower = ch.channel.to_lowercase();
+                if channel_lower.contains("gpu") {
+                    gpu_power += watts;
+                } else if channel_lower.contains("cpu") || channel_lower.starts_with("pacc") {
+                    cpu_power += watts;
+                } else if channel_lower.starts_with("ane") {
+                    ane_power += watts;
+                } else if channel_lower.contains("amcc")
+                    || channel_lower.contains("dcs")
+                    || channel_lower.contains("dram")
+                    || channel_lower.contains("isp")
+                    || channel_lower.contains("pmp")
+                    || channel_lower.contains("nub")
+                    || channel_lower.contains("soc")
+                {
+                    other_power += watts;
                 }
             }
         }
 
-        let seconds = elapsed.as_secs_f64().max(0.001);
-        self.cpu_power = (cpu_energy / seconds) as f32;
-        self.gpu_power = (gpu_energy / seconds) as f32;
-        self.ane_power = (ane_energy / seconds) as f32;
-        self.total_system_power = self.cpu_power + self.gpu_power + self.ane_power;
+        self.cpu_power = cpu_power;
+        self.gpu_power = gpu_power;
+        self.ane_power = ane_power;
+        self.package_power = cpu_power + gpu_power + ane_power + other_power;
     }
 
     fn fallback_power_estimate(&mut self) {
@@ -349,7 +591,7 @@ impl PowerData {
         self.cpu_power = base_power + (cpu_usage / 100.0) * max_cpu_power;
         self.gpu_power = 1.0;
         self.ane_power = 0.0;
-        self.total_system_power = self.cpu_power + self.gpu_power;
+        self.package_power = self.cpu_power + self.gpu_power;
     }
 
     fn refresh_power_mode(&mut self) {
@@ -375,7 +617,7 @@ impl PowerData {
     }
 
     pub fn total_power_watts(&self) -> f32 {
-        self.total_system_power
+        self.system_power
     }
 
     pub fn power_mode(&self) -> PowerMode {
@@ -402,12 +644,16 @@ impl Drop for PowerData {
     }
 }
 
-fn energy_to_joules(value: i64, unit: &str) -> f64 {
-    let val = value as f64;
-    match unit {
-        "mJ" => val / 1_000.0,
-        "uJ" => val / 1_000_000.0,
-        "nJ" => val / 1_000_000_000.0,
-        _ => val / 1_000_000.0,
-    }
+fn energy_to_watts(value: i64, unit: &str, duration_ms: u64) -> Option<f32> {
+    let val = value as f32;
+    let duration_sec = duration_ms as f32 / 1000.0;
+
+    let watts = match unit {
+        "mJ" => val / 1_000.0 / duration_sec,
+        "uJ" => val / 1_000_000.0 / duration_sec,
+        "nJ" => val / 1_000_000_000.0 / duration_sec,
+        _ => return None,
+    };
+
+    Some(watts)
 }

@@ -8,46 +8,124 @@ use std::io;
 use std::time::Duration;
 
 use app::App;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{self, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
 
-#[derive(Parser, Debug)]
-#[command(name = "jolt")]
-#[command(
-    author,
-    version,
-    about = "Beautiful battery & energy monitor for macOS"
-)]
-struct Args {
-    #[arg(short, long, default_value = "1000")]
-    refresh_ms: u64,
+use config::{UserConfig, config_path, ensure_dirs};
 
-    #[arg(short, long, default_value = "auto")]
-    theme: String,
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Launch the TUI interface (default)
+    #[command(alias = "tui")]
+    Ui {
+        /// Update interval in milliseconds
+        #[arg(short, long)]
+        refresh_ms: Option<u64>,
+
+        /// Theme mode (auto, dark, light)
+        #[arg(short, long)]
+        theme: Option<String>,
+
+        /// Low power mode - reduced refresh rate
+        #[arg(short = 'L', long)]
+        low_power: bool,
+    },
+
+    /// Output metrics in JSON format (suitable for piping)
+    #[command(alias = "raw")]
+    Pipe {
+        /// Number of samples to output (0 = infinite)
+        #[arg(short, long, default_value_t = 0)]
+        samples: u32,
+
+        /// Update interval in milliseconds
+        #[arg(short, long, default_value_t = 1000)]
+        interval: u64,
+
+        /// Compact JSON output (one line per sample)
+        #[arg(short, long)]
+        compact: bool,
+    },
+
+    /// Print debug information about power sources and sensors
+    Debug,
+
+    /// Show or edit configuration
+    Config {
+        /// Print config file path
+        #[arg(long)]
+        path: bool,
+
+        /// Reset config to defaults
+        #[arg(long)]
+        reset: bool,
+
+        /// Open config file in $EDITOR
+        #[arg(short, long)]
+        edit: bool,
+    },
+}
+
+/// Beautiful battery & energy monitor for macOS
+/// https://github.com/jordond/jolt
+#[derive(Debug, Parser)]
+#[command(name = "jolt", version, verbatim_doc_comment)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Update interval in milliseconds (for default TUI mode)
+    #[arg(short, long, global = true)]
+    refresh_ms: Option<u64>,
+
+    /// Theme mode (auto, dark, light)
+    #[arg(short, long, global = true)]
+    theme: Option<String>,
+
+    /// Low power mode
+    #[arg(short = 'L', long, global = true)]
+    low_power: bool,
 }
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+    let _ = ensure_dirs();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    let mut terminal = setup_terminal()?;
-    let result = run(&mut terminal, args);
-    restore_terminal(&mut terminal)?;
-
-    result
+    match cli.command {
+        Some(Commands::Pipe { samples, interval, compact }) => {
+            run_pipe(samples, interval, compact)
+        }
+        Some(Commands::Debug) => {
+            run_debug()
+        }
+        Some(Commands::Config { path, reset, edit }) => {
+            run_config(path, reset, edit)
+        }
+        Some(Commands::Ui { refresh_ms, theme, low_power }) => {
+            let mut config = UserConfig::load();
+            let refresh_from_cli = config.merge_with_args(theme.as_deref(), refresh_ms, low_power);
+            run_tui(config, refresh_from_cli)
+        }
+        None => {
+            let mut config = UserConfig::load();
+            let refresh_from_cli = config.merge_with_args(cli.theme.as_deref(), cli.refresh_ms, cli.low_power);
+            run_tui(config, refresh_from_cli)
+        }
+    }
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
@@ -55,41 +133,206 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: Args) -> Result<()> {
-    let theme_mode = match args.theme.as_str() {
-        "dark" => config::ThemeMode::Dark,
-        "light" => config::ThemeMode::Light,
-        _ => config::ThemeMode::Auto,
-    };
+fn run_tui(user_config: UserConfig, refresh_from_cli: bool) -> Result<()> {
+    let mut terminal = setup_terminal()?;
+    let result = run_tui_loop(&mut terminal, user_config, refresh_from_cli);
+    restore_terminal(&mut terminal)?;
+    result
+}
 
-    let mut app = App::new(theme_mode)?;
-    let tick_rate = Duration::from_millis(args.refresh_ms);
+fn run_tui_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    user_config: UserConfig,
+    refresh_from_cli: bool,
+) -> Result<()> {
+    let mut app = App::new(user_config, refresh_from_cli)?;
 
     loop {
+        let tick_rate = Duration::from_millis(app.refresh_ms);
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        let should_tick = if event::poll(tick_rate)? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let action = input::handle_key(&app, key);
                     if !app.handle_action(action) {
                         break;
                     }
+                    false
                 }
+                Event::Resize(_, _) => false,
+                _ => false,
             }
+        } else {
+            true
+        };
+
+        if should_tick {
+            app.tick()?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_pipe(samples: u32, interval: u64, compact: bool) -> Result<()> {
+    use data::{BatteryData, PowerData, ProcessData};
+    use serde_json::json;
+
+    let mut battery = BatteryData::new()?;
+    let mut power = PowerData::new()?;
+    let mut processes = ProcessData::new()?;
+    let mut counter = 0u32;
+
+    loop {
+        battery.refresh()?;
+        power.refresh()?;
+        processes.refresh()?;
+
+        let top_processes: Vec<_> = processes.processes.iter().take(10).map(|p| {
+            json!({
+                "pid": p.pid,
+                "name": p.name,
+                "cpu": p.cpu_usage,
+                "memory_mb": p.memory_mb,
+                "energy": p.energy_impact,
+            })
+        }).collect();
+
+        let doc = json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "battery": {
+                "percent": battery.charge_percent(),
+                "state": battery.state_label(),
+                "health": battery.health_percent(),
+                "capacity_wh": battery.max_capacity_wh(),
+                "time_remaining_min": battery.time_remaining_minutes(),
+                "cycle_count": battery.cycle_count(),
+            },
+            "power": {
+                "cpu_watts": power.cpu_power_watts(),
+                "gpu_watts": power.gpu_power_watts(),
+                "total_watts": power.total_power_watts(),
+                "mode": power.power_mode_label(),
+            },
+            "top_processes": top_processes,
+        });
+
+        if compact {
+            println!("{}", serde_json::to_string(&doc)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&doc)?);
         }
 
-        app.tick()?;
+        counter += 1;
+        if samples > 0 && counter >= samples {
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(interval));
     }
+
+    Ok(())
+}
+
+fn run_debug() -> Result<()> {
+    use data::{BatteryData, PowerData};
+
+    println!("jolt debug information");
+    println!("{}", "=".repeat(60));
+
+    println!("\n--- System Info ---");
+    if let Ok(output) = std::process::Command::new("system_profiler")
+        .args(["SPHardwareDataType", "-json"])
+        .output()
+    {
+        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+            if let Some(hw) = json.get("SPHardwareDataType").and_then(|v| v.get(0)) {
+                println!("Chip: {}", hw.get("chip_type").and_then(|v| v.as_str()).unwrap_or("Unknown"));
+                println!("Model: {}", hw.get("machine_model").and_then(|v| v.as_str()).unwrap_or("Unknown"));
+                println!("Cores: {}", hw.get("number_processors").and_then(|v| v.as_str()).unwrap_or("Unknown"));
+            }
+        }
+    }
+
+    println!("\n--- Battery Info ---");
+    let battery = BatteryData::new()?;
+    println!("Charge: {:.1}%", battery.charge_percent());
+    println!("State: {}", battery.state_label());
+    if let Some(watts) = battery.charging_watts() {
+        println!("Charging at: {:.1}W", watts);
+    }
+    if let Some(charger) = battery.charger_watts() {
+        println!("Charger: {}W", charger);
+    }
+    println!("Health: {:.1}%", battery.health_percent());
+    println!("Capacity: {:.1}Wh", battery.max_capacity_wh());
+    if let Some(cycles) = battery.cycle_count() {
+        println!("Cycles: {}", cycles);
+    }
+    if let Some(time) = battery.time_remaining_formatted() {
+        println!("Time remaining: {}", time);
+    }
+
+    println!("\n--- Power Metrics ---");
+    let mut power = PowerData::new()?;
+    std::thread::sleep(Duration::from_millis(500));
+    power.refresh()?;
+    println!("CPU Power: {:.2}W", power.cpu_power_watts());
+    println!("GPU Power: {:.2}W", power.gpu_power_watts());
+    println!("Total Power: {:.2}W", power.total_power_watts());
+    println!("Power Mode: {}", power.power_mode_label());
+
+    println!("\n--- Config Paths ---");
+    println!("Config: {}", config_path().display());
+    println!("Cache: {}", config::cache_dir().display());
+
+    println!("\n--- Current Config ---");
+    let config = UserConfig::load();
+    println!("{}", toml::to_string_pretty(&config)?);
+
+    Ok(())
+}
+
+fn run_config(path: bool, reset: bool, edit: bool) -> Result<()> {
+    let config_file = config_path();
+
+    if path {
+        println!("{}", config_file.display());
+        return Ok(());
+    }
+
+    if reset {
+        let config = UserConfig::default();
+        config.save()?;
+        println!("Config reset to defaults at: {}", config_file.display());
+        return Ok(());
+    }
+
+    if edit {
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+        
+        if !config_file.exists() {
+            let config = UserConfig::default();
+            config.save()?;
+        }
+        
+        std::process::Command::new(&editor)
+            .arg(&config_file)
+            .status()?;
+        
+        return Ok(());
+    }
+
+    let config = UserConfig::load();
+    println!("Config file: {}", config_file.display());
+    println!();
+    println!("{}", toml::to_string_pretty(&config)?);
 
     Ok(())
 }

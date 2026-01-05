@@ -1,29 +1,88 @@
 use ratatui::{
     layout::{Constraint, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Borders, Row, Table, TableState},
+    widgets::{Block, Borders, Row, Table},
     Frame,
 };
 
-use crate::app::App;
+use crate::app::{App, SortColumn};
 use crate::config::Theme;
-use crate::data::processes::EnergyLevel;
+
+fn energy_gradient_color(energy: f32, theme: &Theme) -> Color {
+    let (low_r, low_g, low_b) = extract_rgb(theme.success);
+    let (mid_r, mid_g, mid_b) = extract_rgb(theme.warning);
+    let (high_r, high_g, high_b) = extract_rgb(theme.danger);
+
+    let t = (energy / 50.0).clamp(0.0, 1.0);
+
+    let (r, g, b) = if t < 0.3 {
+        let t2 = t / 0.3;
+        (
+            lerp(low_r, mid_r, t2),
+            lerp(low_g, mid_g, t2),
+            lerp(low_b, mid_b, t2),
+        )
+    } else {
+        let t2 = (t - 0.3) / 0.7;
+        (
+            lerp(mid_r, high_r, t2),
+            lerp(mid_g, high_g, t2),
+            lerp(mid_b, high_b, t2),
+        )
+    };
+
+    Color::Rgb(r, g, b)
+}
+
+fn extract_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (128, 128, 128),
+    }
+}
+
+fn lerp(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t) as u8
+}
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+    let title = if app.selection_mode {
+        " Processes [SELECTION MODE - Esc to exit] "
+    } else if app.merge_mode {
+        " Processes [MERGED] "
+    } else {
+        " Processes "
+    };
+
+    let border_color = if app.selection_mode {
+        theme.accent
+    } else {
+        theme.border
+    };
+
     let block = Block::default()
-        .title(" Processes (↑↓ navigate, Enter expand, K kill) ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border))
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(theme.bg));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let header_cells = ["", "PID", "Name", "CPU %", "Memory", "Energy"];
+    let sort_indicator = if app.sort_ascending { "▲" } else { "▼" };
+    let header_cells: [String; 7] = [
+        "".to_string(),
+        format_header("PID", SortColumn::Pid, app.sort_column, sort_indicator),
+        format_header("Name", SortColumn::Name, app.sort_column, sort_indicator),
+        format_header("CPU %", SortColumn::Cpu, app.sort_column, sort_indicator),
+        format_header("Memory", SortColumn::Memory, app.sort_column, sort_indicator),
+        format_header("Impact", SortColumn::Energy, app.sort_column, sort_indicator),
+        "Kill".to_string(),
+    ];
     let header = Row::new(header_cells.iter().map(|h| {
         Span::styled(
-            *h,
+            h.as_str(),
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -31,13 +90,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     }))
     .height(1);
 
-    let visible_processes = app.get_visible_processes();
+    let all_processes = app.get_visible_processes();
+    let max_visible = (inner.height.saturating_sub(1)) as usize;
+    let visible_processes: Vec<_> = all_processes
+        .iter()
+        .skip(app.process_scroll_offset)
+        .take(max_visible)
+        .collect();
 
     let rows: Vec<Row> = visible_processes
         .iter()
         .enumerate()
         .map(|(idx, (process, depth))| {
-            let is_selected = idx == app.selected_process_index;
+            let actual_idx = idx + app.process_scroll_offset;
+            let is_selected = actual_idx == app.selected_process_index;
             let has_children = process.children.is_some();
             let is_expanded = app.expanded_groups.contains(&process.pid);
 
@@ -54,18 +120,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
                 "  "
             };
 
-            let energy_color = match process.energy_level() {
-                EnergyLevel::High => theme.danger,
-                EnergyLevel::Medium => theme.warning,
-                EnergyLevel::Low => theme.success,
-            };
+            let energy_color = energy_gradient_color(process.energy_impact, theme);
 
             let style = if is_selected {
                 Style::default()
                     .bg(theme.selection_bg)
                     .fg(theme.selection_fg)
             } else {
-                Style::default().fg(theme.fg)
+                Style::default().fg(energy_color)
+            };
+
+            let killable_indicator = if process.is_killable { "✓" } else { "✗" };
+            let killable_style = if is_selected {
+                style
+            } else if process.is_killable {
+                Style::default().fg(theme.success)
+            } else {
+                Style::default().fg(theme.muted)
             };
 
             let cells = vec![
@@ -74,10 +145,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
                 Span::styled(truncate_name(&process.name, 30), style),
                 Span::styled(format!("{:.1}", process.cpu_usage), style),
                 Span::styled(format!("{:.1}MB", process.memory_mb), style),
-                Span::styled(
-                    format!("{:.1}", process.energy_impact),
-                    style.fg(energy_color),
-                ),
+                Span::styled(format!("{:.1}", process.energy_impact), style),
+                Span::styled(killable_indicator, killable_style),
             ];
 
             Row::new(cells).height(1).style(style)
@@ -91,21 +160,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         Constraint::Length(8),
         Constraint::Length(10),
         Constraint::Length(8),
+        Constraint::Length(4),
     ];
 
-    let table = Table::new(rows, widths).header(header).highlight_style(
-        Style::default()
-            .bg(theme.selection_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    let table = Table::new(rows, widths).header(header);
 
-    let mut state = TableState::default();
-    state.select(Some(
-        app.selected_process_index
-            .saturating_sub(app.process_scroll_offset),
-    ));
-
-    frame.render_stateful_widget(table, inner, &mut state);
+    frame.render_widget(table, inner);
 }
 
 fn truncate_name(name: &str, max_len: usize) -> String {
@@ -113,5 +173,13 @@ fn truncate_name(name: &str, max_len: usize) -> String {
         name.to_string()
     } else {
         format!("{}...", &name[..max_len - 3])
+    }
+}
+
+fn format_header(name: &str, col: SortColumn, current: SortColumn, indicator: &str) -> String {
+    if col == current {
+        format!("{} {}", name, indicator)
+    } else {
+        name.to_string()
     }
 }

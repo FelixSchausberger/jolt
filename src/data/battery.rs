@@ -15,11 +15,15 @@ pub struct BatteryData {
     current_charge: f32,
     max_capacity: f32,
     design_capacity: f32,
+    voltage_mv: u32,
+    amperage_ma: i32,
     state: ChargeState,
     time_to_full: Option<Duration>,
     time_to_empty: Option<Duration>,
     cycle_count: Option<u32>,
     health_percent: f32,
+    charger_watts: Option<u32>,
+    external_connected: bool,
 }
 
 impl BatteryData {
@@ -28,11 +32,15 @@ impl BatteryData {
             current_charge: 100.0,
             max_capacity: 100.0,
             design_capacity: 100.0,
+            voltage_mv: 11500,
+            amperage_ma: 0,
             state: ChargeState::Unknown,
             time_to_full: None,
             time_to_empty: None,
             cycle_count: None,
             health_percent: 100.0,
+            charger_watts: None,
+            external_connected: false,
         };
 
         data.refresh()?;
@@ -65,39 +73,22 @@ impl BatteryData {
                     }
                 }
 
-                if line.contains("charging") && !line.contains("not charging") {
-                    self.state = ChargeState::Charging;
-                } else if line.contains("discharging") {
+                // Order matters: check more specific patterns first
+                if line.contains("discharging") {
                     self.state = ChargeState::Discharging;
-                } else if line.contains("charged") {
-                    self.state = ChargeState::Full;
                 } else if line.contains("not charging") {
                     self.state = ChargeState::NotCharging;
+                } else if line.contains("charged") {
+                    self.state = ChargeState::Full;
+                } else if line.contains("charging") {
+                    self.state = ChargeState::Charging;
                 }
 
-                if let Some(time_start) =
-                    line.find(|c: char| c.is_ascii_digit() && line.contains(':'))
-                {
-                    let remaining = &line[time_start..];
-                    if let Some(colon_pos) = remaining.find(':') {
-                        let hours_str = &remaining[..colon_pos];
-                        let mins_start = colon_pos + 1;
-                        let mins_end = remaining[mins_start..]
-                            .find(|c: char| !c.is_ascii_digit())
-                            .map(|p| mins_start + p)
-                            .unwrap_or(remaining.len());
-                        let mins_str = &remaining[mins_start..mins_end];
-
-                        if let (Ok(hours), Ok(mins)) =
-                            (hours_str.parse::<u64>(), mins_str.parse::<u64>())
-                        {
-                            let duration = Duration::from_secs(hours * 3600 + mins * 60);
-                            if self.state == ChargeState::Charging {
-                                self.time_to_full = Some(duration);
-                            } else {
-                                self.time_to_empty = Some(duration);
-                            }
-                        }
+                if let Some(time) = parse_time_remaining(line) {
+                    if self.state == ChargeState::Charging {
+                        self.time_to_full = Some(time);
+                    } else {
+                        self.time_to_empty = Some(time);
                     }
                 }
             }
@@ -106,7 +97,7 @@ impl BatteryData {
 
     fn refresh_from_ioreg(&mut self) {
         if let Ok(output) = Command::new("ioreg")
-            .args(["-r", "-c", "AppleSmartBattery", "-d", "1"])
+            .args(["-rn", "AppleSmartBattery"])
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -115,26 +106,85 @@ impl BatteryData {
     }
 
     fn parse_ioreg_output(&mut self, output: &str) {
+        let mut nominal_capacity: Option<f32> = None;
+        let mut design_capacity: Option<f32> = None;
+        let mut is_charging = false;
+        let mut avg_time_to_full: Option<u64> = None;
+        let mut avg_time_to_empty: Option<u64> = None;
+
         for line in output.lines() {
             let line = line.trim();
 
-            if line.contains("\"MaxCapacity\"") {
+            if line.contains("\"NominalChargeCapacity\"") {
                 if let Some(val) = extract_number(line) {
-                    self.max_capacity = val as f32;
+                    nominal_capacity = Some(val as f32);
                 }
-            } else if line.contains("\"DesignCapacity\"") {
+            } else if line.contains("\"DesignCapacity\"") && !line.contains("FedDesignCapacity") {
                 if let Some(val) = extract_number(line) {
-                    self.design_capacity = val as f32;
+                    design_capacity = Some(val as f32);
                 }
-            } else if line.contains("\"CycleCount\"") {
+            } else if line.contains("\"CycleCount\"") && !line.contains("DesignCycleCount") && !line.contains("Lifetime") {
                 if let Some(val) = extract_number(line) {
                     self.cycle_count = Some(val as u32);
+                }
+            } else if line.starts_with("\"Voltage\"") {
+                if let Some(val) = extract_number(line) {
+                    self.voltage_mv = val as u32;
+                }
+            } else if line.contains("\"Amperage\"") || line.contains("\"InstantAmperage\"") {
+                if let Some(val) = extract_number(line) {
+                    self.amperage_ma = val as i32;
+                }
+            } else if line.contains("\"ExternalConnected\"") {
+                self.external_connected = line.contains("Yes");
+            } else if line.contains("\"IsCharging\"") {
+                is_charging = line.contains("Yes");
+            } else if line.contains("\"AvgTimeToFull\"") {
+                if let Some(val) = extract_number(line) {
+                    if val > 0 && val < 65535 {
+                        avg_time_to_full = Some(val as u64);
+                    }
+                }
+            } else if line.contains("\"AvgTimeToEmpty\"") {
+                if let Some(val) = extract_number(line) {
+                    if val > 0 && val < 65535 {
+                        avg_time_to_empty = Some(val as u64);
+                    }
                 }
             }
         }
 
-        if self.design_capacity > 0.0 {
-            self.health_percent = (self.max_capacity / self.design_capacity) * 100.0;
+        if let Some(mins) = avg_time_to_full {
+            self.time_to_full = Some(Duration::from_secs(mins * 60));
+        }
+        if let Some(mins) = avg_time_to_empty {
+            self.time_to_empty = Some(Duration::from_secs(mins * 60));
+        }
+
+        if self.external_connected {
+            if is_charging {
+                self.state = ChargeState::Charging;
+            } else if self.current_charge >= 99.0 {
+                self.state = ChargeState::Full;
+            } else {
+                self.state = ChargeState::NotCharging;
+            }
+        } else {
+            self.state = ChargeState::Discharging;
+        }
+
+        if self.external_connected {
+            self.charger_watts = parse_charger_watts(output);
+        } else {
+            self.charger_watts = None;
+        }
+
+        if let (Some(nominal), Some(design)) = (nominal_capacity, design_capacity) {
+            if design > 0.0 {
+                self.max_capacity = nominal;
+                self.design_capacity = design;
+                self.health_percent = (nominal / design) * 100.0;
+            }
         }
     }
 
@@ -142,14 +192,13 @@ impl BatteryData {
         self.current_charge
     }
 
-    #[allow(dead_code)]
     pub fn max_capacity_wh(&self) -> f32 {
-        self.max_capacity
+        self.max_capacity * (self.voltage_mv as f32 / 1000.0) / 1000.0
     }
 
     #[allow(dead_code)]
     pub fn design_capacity_wh(&self) -> f32 {
-        self.design_capacity
+        self.design_capacity * (self.voltage_mv as f32 / 1000.0) / 1000.0
     }
 
     pub fn state(&self) -> ChargeState {
@@ -188,6 +237,10 @@ impl BatteryData {
         })
     }
 
+    pub fn time_remaining_minutes(&self) -> Option<u64> {
+        self.time_remaining().map(|d| d.as_secs() / 60)
+    }
+
     pub fn cycle_count(&self) -> Option<u32> {
         self.cycle_count
     }
@@ -202,13 +255,64 @@ impl BatteryData {
 
     #[allow(dead_code)]
     pub fn is_on_ac(&self) -> bool {
-        matches!(
-            self.state,
-            ChargeState::Charging | ChargeState::Full | ChargeState::NotCharging
-        )
+        self.external_connected
+    }
+
+    pub fn charging_watts(&self) -> Option<f32> {
+        if self.state == ChargeState::Charging && self.amperage_ma > 0 {
+            let watts = (self.amperage_ma as f32 / 1000.0) * (self.voltage_mv as f32 / 1000.0);
+            Some(watts)
+        } else {
+            None
+        }
+    }
+
+    pub fn charger_watts(&self) -> Option<u32> {
+        self.charger_watts
+    }
+
+    pub fn discharge_watts(&self) -> Option<f32> {
+        if self.state == ChargeState::Discharging && self.amperage_ma < 0 {
+            let watts = (self.amperage_ma.abs() as f32 / 1000.0) * (self.voltage_mv as f32 / 1000.0);
+            Some(watts)
+        } else {
+            None
+        }
     }
 }
 
 fn extract_number(line: &str) -> Option<i64> {
     line.split('=').nth(1)?.trim().parse::<i64>().ok()
+}
+
+fn parse_charger_watts(output: &str) -> Option<u32> {
+    for line in output.lines() {
+        if line.contains("\"AdapterDetails\"") || line.contains("\"AppleRawAdapterDetails\"") {
+            if let Some(watts_pos) = line.find("\"Watts\"=") {
+                let after_watts = &line[watts_pos + 8..];
+                let end = after_watts
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(after_watts.len());
+                if let Ok(watts) = after_watts[..end].parse::<u32>() {
+                    return Some(watts);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_time_remaining(line: &str) -> Option<Duration> {
+    let remaining_idx = line.find("remaining")?;
+    let before_remaining = line[..remaining_idx].trim_end();
+
+    let time_end = before_remaining.len();
+    let time_start = before_remaining.rfind(|c: char| !c.is_ascii_digit() && c != ':')?;
+    let time_str = &before_remaining[time_start + 1..time_end];
+
+    let colon_pos = time_str.find(':')?;
+    let hours: u64 = time_str[..colon_pos].parse().ok()?;
+    let mins: u64 = time_str[colon_pos + 1..].parse().ok()?;
+
+    Some(Duration::from_secs(hours * 3600 + mins * 60))
 }
