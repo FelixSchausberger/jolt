@@ -1,45 +1,99 @@
 use color_eyre::eyre::Result;
-use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
-use core_foundation::dictionary::{CFDictionaryRef, CFMutableDictionaryRef};
-use core_foundation::string::CFString;
-use core_foundation_sys::base::kCFAllocatorDefault;
-use core_foundation_sys::dictionary::{CFDictionaryCreateMutableCopy, CFDictionaryGetCount};
+use core_foundation_sys::base::{kCFAllocatorDefault, kCFAllocatorNull, CFRelease, CFTypeRef};
+use core_foundation_sys::dictionary::{
+    CFDictionaryCreateMutableCopy, CFDictionaryGetCount, CFDictionaryGetValue, CFDictionaryRef,
+    CFMutableDictionaryRef,
+};
+use core_foundation_sys::string::{
+    kCFStringEncodingUTF8, CFStringCreateWithBytesNoCopy, CFStringGetCString, CFStringRef,
+};
 use std::ffi::c_void;
 use std::process::Command;
-use std::ptr;
+use std::ptr::null;
 use std::time::{Duration, Instant};
 
 type IOReportSubscriptionRef = *const c_void;
+type CFArrayRef = *const c_void;
 
 #[link(name = "IOReport", kind = "dylib")]
 extern "C" {
     fn IOReportCopyChannelsInGroup(
-        group: core_foundation_sys::string::CFStringRef,
-        subgroup: core_foundation_sys::string::CFStringRef,
-        a: u64,
-        b: u64,
+        a: CFStringRef,
+        b: CFStringRef,
         c: u64,
+        d: u64,
+        e: u64,
     ) -> CFDictionaryRef;
 
     fn IOReportCreateSubscription(
-        a: CFTypeRef,
+        a: *const c_void,
         b: CFMutableDictionaryRef,
         c: *mut CFMutableDictionaryRef,
         d: u64,
-        e: CFTypeRef,
+        e: *const c_void,
     ) -> IOReportSubscriptionRef;
 
     fn IOReportCreateSamples(
-        subscription: IOReportSubscriptionRef,
-        channels: CFMutableDictionaryRef,
-        nil: CFTypeRef,
+        a: IOReportSubscriptionRef,
+        b: CFMutableDictionaryRef,
+        c: *const c_void,
     ) -> CFDictionaryRef;
 
     fn IOReportCreateSamplesDelta(
-        prev: CFDictionaryRef,
-        current: CFDictionaryRef,
-        nil: CFTypeRef,
+        a: CFDictionaryRef,
+        b: CFDictionaryRef,
+        c: *const c_void,
     ) -> CFDictionaryRef;
+
+    fn IOReportChannelGetChannelName(a: CFDictionaryRef) -> CFStringRef;
+    fn IOReportChannelGetUnitLabel(a: CFDictionaryRef) -> CFStringRef;
+    fn IOReportSimpleGetIntegerValue(a: CFDictionaryRef, b: i32) -> i64;
+}
+
+extern "C" {
+    fn CFArrayGetCount(arr: CFArrayRef) -> isize;
+    fn CFArrayGetValueAtIndex(arr: CFArrayRef, idx: isize) -> *const c_void;
+}
+
+fn cfstr(val: &str) -> CFStringRef {
+    unsafe {
+        CFStringCreateWithBytesNoCopy(
+            kCFAllocatorDefault,
+            val.as_ptr(),
+            val.len() as isize,
+            kCFStringEncodingUTF8,
+            0,
+            kCFAllocatorNull,
+        )
+    }
+}
+
+fn from_cfstr(val: CFStringRef) -> String {
+    if val.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let mut buf = [0i8; 128];
+        if CFStringGetCString(val, buf.as_mut_ptr(), 128, kCFStringEncodingUTF8) == 0 {
+            return String::new();
+        }
+        std::ffi::CStr::from_ptr(buf.as_ptr())
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+fn cfdict_get_val(dict: CFDictionaryRef, key: &str) -> Option<CFTypeRef> {
+    unsafe {
+        let key = cfstr(key);
+        let val = CFDictionaryGetValue(dict, key as _);
+        CFRelease(key as _);
+        if val.is_null() {
+            None
+        } else {
+            Some(val)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +104,66 @@ pub enum PowerMode {
     Unknown,
 }
 
+struct IOReportIterator {
+    sample: CFDictionaryRef,
+    items: CFArrayRef,
+    index: isize,
+    count: isize,
+}
+
+impl IOReportIterator {
+    fn new(sample: CFDictionaryRef) -> Option<Self> {
+        let items = cfdict_get_val(sample, "IOReportChannels")? as CFArrayRef;
+        let count = unsafe { CFArrayGetCount(items) };
+        Some(Self {
+            sample,
+            items,
+            index: 0,
+            count,
+        })
+    }
+}
+
+impl Drop for IOReportIterator {
+    fn drop(&mut self) {
+        unsafe {
+            CFRelease(self.sample as _);
+        }
+    }
+}
+
+struct ChannelData {
+    name: String,
+    unit: String,
+    value: i64,
+}
+
+impl Iterator for IOReportIterator {
+    type Item = ChannelData;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.count {
+            return None;
+        }
+
+        let item =
+            unsafe { CFArrayGetValueAtIndex(self.items, self.index) } as CFDictionaryRef;
+        self.index += 1;
+
+        if item.is_null() {
+            return self.next();
+        }
+
+        let name = from_cfstr(unsafe { IOReportChannelGetChannelName(item) });
+        let unit = from_cfstr(unsafe { IOReportChannelGetUnitLabel(item) })
+            .trim()
+            .to_string();
+        let value = unsafe { IOReportSimpleGetIntegerValue(item, 0) };
+
+        Some(ChannelData { name, unit, value })
+    }
+}
+
 struct IOReportSubscription {
     subscription: IOReportSubscriptionRef,
     channels: CFMutableDictionaryRef,
@@ -58,41 +172,33 @@ struct IOReportSubscription {
 impl IOReportSubscription {
     fn new() -> Option<Self> {
         unsafe {
-            let energy_group = CFString::new("Energy Model");
+            let group = cfstr("Energy Model");
+            let chan = IOReportCopyChannelsInGroup(group, null(), 0, 0, 0);
+            CFRelease(group as _);
 
-            let energy_channels = IOReportCopyChannelsInGroup(
-                energy_group.as_concrete_TypeRef(),
-                ptr::null(),
-                0,
-                0,
-                0,
-            );
-
-            if energy_channels.is_null() {
+            if chan.is_null() {
                 return None;
             }
 
-            let count = CFDictionaryGetCount(energy_channels);
-            let channels =
-                CFDictionaryCreateMutableCopy(kCFAllocatorDefault, count, energy_channels);
+            if cfdict_get_val(chan, "IOReportChannels").is_none() {
+                CFRelease(chan as _);
+                return None;
+            }
 
-            CFRelease(energy_channels as CFTypeRef);
+            let count = CFDictionaryGetCount(chan);
+            let channels = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, count, chan);
+            CFRelease(chan as _);
 
             if channels.is_null() {
                 return None;
             }
 
-            let mut sub_channels: CFMutableDictionaryRef = ptr::null_mut();
-            let subscription = IOReportCreateSubscription(
-                ptr::null(),
-                channels,
-                &mut sub_channels,
-                0,
-                ptr::null(),
-            );
+            let mut sub_dict: CFMutableDictionaryRef = null::<c_void>() as _;
+            let subscription =
+                IOReportCreateSubscription(null(), channels, &mut sub_dict, 0, null());
 
             if subscription.is_null() {
-                CFRelease(channels as CFTypeRef);
+                CFRelease(channels as _);
                 return None;
             }
 
@@ -104,13 +210,12 @@ impl IOReportSubscription {
     }
 
     fn sample(&self) -> Option<CFDictionaryRef> {
-        unsafe {
-            let sample = IOReportCreateSamples(self.subscription, self.channels, ptr::null());
-            if sample.is_null() {
-                None
-            } else {
-                Some(sample)
-            }
+        let sample =
+            unsafe { IOReportCreateSamples(self.subscription, self.channels, null()) };
+        if sample.is_null() {
+            None
+        } else {
+            Some(sample)
         }
     }
 }
@@ -118,9 +223,7 @@ impl IOReportSubscription {
 impl Drop for IOReportSubscription {
     fn drop(&mut self) {
         unsafe {
-            if !self.channels.is_null() {
-                CFRelease(self.channels as CFTypeRef);
-            }
+            CFRelease(self.channels as _);
         }
     }
 }
@@ -164,121 +267,70 @@ impl PowerData {
     }
 
     fn refresh_power_metrics(&mut self) {
-        if let Some(ref subscription) = self.subscription {
-            if let Some(current_sample) = subscription.sample() {
-                if let (Some(prev_sample), Some(prev_time)) =
-                    (self.last_sample, self.last_sample_time)
-                {
-                    let elapsed = prev_time.elapsed();
-                    self.calculate_power_from_samples(prev_sample, current_sample, elapsed);
+        let Some(ref subscription) = self.subscription else {
+            self.fallback_power_estimate();
+            return;
+        };
 
-                    unsafe {
-                        CFRelease(prev_sample as CFTypeRef);
-                    }
-                }
+        let Some(current_sample) = subscription.sample() else {
+            self.fallback_power_estimate();
+            return;
+        };
 
-                self.last_sample = Some(current_sample);
-                self.last_sample_time = Some(Instant::now());
-                return;
-            }
+        let (Some(prev_sample), Some(prev_time)) = (self.last_sample, self.last_sample_time)
+        else {
+            self.last_sample = Some(current_sample);
+            self.last_sample_time = Some(Instant::now());
+            return;
+        };
+
+        let elapsed = prev_time.elapsed();
+        self.calculate_power_from_delta(prev_sample, current_sample, elapsed);
+
+        unsafe {
+            CFRelease(prev_sample as _);
         }
 
-        self.fallback_power_estimate();
+        self.last_sample = Some(current_sample);
+        self.last_sample_time = Some(Instant::now());
     }
 
-    fn calculate_power_from_samples(
+    fn calculate_power_from_delta(
         &mut self,
         prev: CFDictionaryRef,
         current: CFDictionaryRef,
         elapsed: Duration,
     ) {
-        unsafe {
-            let delta = IOReportCreateSamplesDelta(prev, current, ptr::null());
-            if delta.is_null() {
-                self.fallback_power_estimate();
-                return;
-            }
-
-            let (cpu, gpu, ane) = Self::parse_energy_delta(delta, elapsed);
-            CFRelease(delta as CFTypeRef);
-
-            self.cpu_power = cpu;
-            self.gpu_power = gpu;
-            self.ane_power = ane;
-            self.total_system_power = cpu + gpu + ane;
+        let delta = unsafe { IOReportCreateSamplesDelta(prev, current, null()) };
+        if delta.is_null() {
+            self.fallback_power_estimate();
+            return;
         }
-    }
-
-    fn parse_energy_delta(delta: CFDictionaryRef, elapsed: Duration) -> (f32, f32, f32) {
-        use core_foundation::array::CFArray;
-        use core_foundation::dictionary::CFDictionary;
-        use core_foundation::number::CFNumber;
 
         let mut cpu_energy: f64 = 0.0;
         let mut gpu_energy: f64 = 0.0;
         let mut ane_energy: f64 = 0.0;
 
-        let delta_dict: CFDictionary<CFString, CFArray> =
-            unsafe { CFDictionary::wrap_under_get_rule(delta) };
+        if let Some(iter) = IOReportIterator::new(delta) {
+            for channel in iter {
+                let joules = energy_to_joules(channel.value, &channel.unit);
+                let name = channel.name.to_lowercase();
 
-        let channels_key = CFString::new("IOReportChannels");
-        if let Some(channels) = delta_dict.find(&channels_key) {
-            let channels_array: &CFArray = unsafe { std::mem::transmute(channels) };
-
-            for i in 0..channels_array.len() {
-                if let Some(channel) = channels_array.get(i) {
-                    let channel_dict: &CFDictionary<CFString, CFString> =
-                        unsafe { std::mem::transmute(&channel) };
-
-                    let channel_name = channel_dict
-                        .find(&CFString::new("IOReportChannelName"))
-                        .map(|v| unsafe {
-                            let s: &CFString = std::mem::transmute(v);
-                            s.to_string()
-                        })
-                        .unwrap_or_default();
-
-                    let value = channel_dict
-                        .find(&CFString::new("IOReportSimpleValue"))
-                        .and_then(|v| unsafe {
-                            let n: &CFNumber = std::mem::transmute(v);
-                            n.to_i64()
-                        })
-                        .unwrap_or(0) as f64;
-
-                    let unit = channel_dict
-                        .find(&CFString::new("IOReportUnit"))
-                        .map(|v| unsafe {
-                            let s: &CFString = std::mem::transmute(v);
-                            s.to_string()
-                        })
-                        .unwrap_or_default();
-
-                    let joules = match unit.as_str() {
-                        "mJ" => value / 1000.0,
-                        "uJ" => value / 1_000_000.0,
-                        "nJ" => value / 1_000_000_000.0,
-                        _ => value / 1_000_000.0,
-                    };
-
-                    let name_lower = channel_name.to_lowercase();
-                    if name_lower.contains("cpu") {
-                        cpu_energy += joules;
-                    } else if name_lower.contains("gpu") {
-                        gpu_energy += joules;
-                    } else if name_lower.contains("ane") {
-                        ane_energy += joules;
-                    }
+                if name.contains("cpu") && !name.contains("gpu") {
+                    cpu_energy += joules;
+                } else if name.contains("gpu") {
+                    gpu_energy += joules;
+                } else if name.contains("ane") {
+                    ane_energy += joules;
                 }
             }
         }
 
         let seconds = elapsed.as_secs_f64().max(0.001);
-        let cpu_watts = (cpu_energy / seconds) as f32;
-        let gpu_watts = (gpu_energy / seconds) as f32;
-        let ane_watts = (ane_energy / seconds) as f32;
-
-        (cpu_watts, gpu_watts, ane_watts)
+        self.cpu_power = (cpu_energy / seconds) as f32;
+        self.gpu_power = (gpu_energy / seconds) as f32;
+        self.ane_power = (ane_energy / seconds) as f32;
+        self.total_system_power = self.cpu_power + self.gpu_power + self.ane_power;
     }
 
     fn fallback_power_estimate(&mut self) {
@@ -286,7 +338,7 @@ impl PowerData {
 
         let mut sys = System::new_all();
         sys.refresh_all();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         sys.refresh_all();
 
         let cpu_usage: f32 =
@@ -344,8 +396,18 @@ impl Drop for PowerData {
     fn drop(&mut self) {
         if let Some(sample) = self.last_sample {
             unsafe {
-                CFRelease(sample as CFTypeRef);
+                CFRelease(sample as _);
             }
         }
+    }
+}
+
+fn energy_to_joules(value: i64, unit: &str) -> f64 {
+    let val = value as f64;
+    match unit {
+        "mJ" => val / 1_000.0,
+        "uJ" => val / 1_000_000.0,
+        "nJ" => val / 1_000_000_000.0,
+        _ => val / 1_000_000.0,
     }
 }
