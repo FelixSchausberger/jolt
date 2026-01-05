@@ -1,0 +1,201 @@
+# jolt
+
+A beautiful terminal-based battery and energy monitor for macOS.
+
+Built for MacBook users who want to understand what's draining their battery. Provides real-time insights into power consumption, process energy usage, and battery health - all in a clean, themeable TUI.
+
+## Features
+
+- **Battery Status** - Real-time charge percentage, charging state, time remaining, battery health, and cycle count
+- **Power Monitoring** - Total system power draw with CPU and GPU breakdown
+- **Process Energy Tracking** - Processes sorted by energy impact with color-coded severity
+- **Collapsible Process Groups** - Expand parent processes to see children consuming energy
+- **Historical Graphs** - Track battery percentage and power draw over time
+- **Theme Support** - Dark and light themes with automatic system detection
+- **Keyboard Navigation** - Full keyboard control with help dialog
+- **Process Management** - Kill energy-hungry processes with confirmation
+
+## Requirements
+
+- macOS (optimized for Apple Silicon, works on Intel)
+- Rust 1.70 or newer
+
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/jordon/jolt.git
+cd jolt
+cargo build --release
+./target/release/jolt
+```
+
+### Via Cargo
+
+```bash
+cd jolt
+cargo install --path .
+jolt
+```
+
+### Homebrew (coming soon)
+
+```bash
+# Future release
+brew install jordon/tap/jolt
+```
+
+## Usage
+
+```bash
+# Run with default settings (1 second refresh)
+jolt
+
+# Faster refresh rate (500ms)
+jolt --refresh-ms 500
+
+# Force dark theme
+jolt --theme dark
+
+# Force light theme
+jolt --theme light
+
+# Show help
+jolt --help
+```
+
+### CLI Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-r, --refresh-ms` | 1000 | Refresh interval in milliseconds |
+| `-t, --theme` | auto | Theme mode: `auto`, `dark`, or `light` |
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Up` / `k` | Move selection up |
+| `Down` / `j` | Move selection down |
+| `Enter` / `Space` | Expand/collapse process group |
+| `K` | Kill selected process |
+| `g` | Toggle graph metric (battery/power) |
+| `t` | Cycle theme (Auto/Dark/Light) |
+| `PgUp` / `PgDn` | Page up/down |
+| `Home` / `End` | Jump to start/end |
+| `h` / `?` | Show help dialog |
+| `q` / `Esc` | Quit |
+
+## Screenshots
+
+<!-- Add screenshots here -->
+
+## Building from Source
+
+### Prerequisites
+
+1. Install Rust via [rustup](https://rustup.rs/):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+2. Ensure you have Xcode Command Line Tools:
+   ```bash
+   xcode-select --install
+   ```
+
+### Build
+
+```bash
+# Clone the repository
+git clone https://github.com/jordon/jolt.git
+cd jolt
+
+# Debug build (faster compilation, slower runtime)
+cargo build
+./target/debug/jolt
+
+# Release build (slower compilation, optimized runtime)
+cargo build --release
+./target/release/jolt
+```
+
+### Development
+
+```bash
+# Run in development mode
+cargo run
+
+# Run with arguments
+cargo run -- --refresh-ms 500 --theme dark
+
+# Check for errors without building
+cargo check
+
+# Run with warnings
+cargo clippy
+```
+
+## Publishing
+
+### To crates.io
+
+1. Create an account at [crates.io](https://crates.io/)
+2. Login via cargo:
+   ```bash
+   cargo login
+   ```
+3. Verify the package:
+   ```bash
+   cargo publish --dry-run
+   ```
+4. Publish:
+   ```bash
+   cargo publish
+   ```
+
+### Homebrew Formula
+
+Create a formula at `Formula/jolt.rb`:
+
+```ruby
+class Jolt < Formula
+  desc "Beautiful TUI battery and energy monitor for macOS"
+  homepage "https://github.com/jordon/jolt"
+  url "https://github.com/jordon/jolt/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "YOUR_SHA256_HERE"
+  license "MIT"
+
+  depends_on "rust" => :build
+
+  def install
+    system "cargo", "install", *std_cargo_args
+  end
+
+  test do
+    assert_match "jolt", shell_output("#{bin}/jolt --version")
+  end
+end
+```
+
+To create a tap:
+1. Create a repo named `homebrew-tap`
+2. Add the formula
+3. Users install via `brew install jordon/tap/jolt`
+
+## How it Works
+
+jolt collects system metrics using macOS-native tools and APIs:
+
+- **Battery Data** - Parsed from `pmset -g batt` and `ioreg -r -c AppleSmartBattery`
+- **Power Metrics** - CPU usage sampled via sysinfo, estimated power draw
+- **Process Info** - Collected via the [sysinfo](https://crates.io/crates/sysinfo) crate
+- **Terminal UI** - Built with [ratatui](https://crates.io/crates/ratatui) and [crossterm](https://crates.io/crates/crossterm)
+- **System Theme** - Detected via `defaults read -g AppleInterfaceStyle`
+
+The IOReport framework bindings are included for future direct access to Apple's power metrics (similar to `powermetrics` command).
+
+## License
+
+MIT
