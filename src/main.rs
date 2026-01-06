@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod daemon;
 mod data;
 mod input;
 mod theme;
@@ -158,6 +159,110 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ThemeCommands>,
     },
+
+    /// Manage the background daemon
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
+
+    /// View and manage historical data
+    History {
+        #[command(subcommand)]
+        command: Option<HistoryCommands>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonCommands {
+    /// Start the daemon
+    Start {
+        /// Run in foreground (don't daemonize)
+        #[arg(short, long)]
+        foreground: bool,
+    },
+
+    /// Stop the running daemon
+    Stop,
+
+    /// Check daemon status
+    Status,
+
+    /// View daemon logs
+    Logs {
+        /// Number of lines to show
+        #[arg(short, long, default_value_t = 50)]
+        lines: usize,
+
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+    },
+
+    /// Install daemon to start on login (via launchd)
+    Install,
+
+    /// Uninstall daemon from launchd
+    Uninstall,
+}
+
+#[derive(Debug, Subcommand)]
+enum HistoryCommands {
+    /// Show history summary (default)
+    Summary {
+        /// Time period: today, week, month, all
+        #[arg(short, long, default_value = "week")]
+        period: String,
+    },
+
+    /// Show top power consumers
+    Top {
+        /// Time period: today, week, month, all
+        #[arg(short, long, default_value = "week")]
+        period: String,
+
+        /// Number of processes to show
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
+
+    /// Export history data
+    Export {
+        /// Output file path (defaults to stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output format: json, csv
+        #[arg(short, long, default_value = "json")]
+        format: String,
+
+        /// Start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Time period (alternative to from/to): today, week, month, all
+        #[arg(short, long)]
+        period: Option<String>,
+
+        /// Include raw samples in export (can be large)
+        #[arg(long)]
+        include_samples: bool,
+    },
+
+    /// Prune old data
+    Prune {
+        /// Delete data older than N days
+        #[arg(long)]
+        older_than: Option<u32>,
+
+        /// Skip confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 /// Beautiful battery & energy monitor for macOS
@@ -196,6 +301,8 @@ fn main() -> Result<()> {
         Some(Commands::Debug) => run_debug(),
         Some(Commands::Config { path, reset, edit }) => run_config(path, reset, edit),
         Some(Commands::Theme { command }) => run_theme(command),
+        Some(Commands::Daemon { command }) => run_daemon_command(command),
+        Some(Commands::History { command }) => run_history_command(command),
         Some(Commands::Ui {
             refresh_ms,
             appearance,
@@ -806,4 +913,507 @@ fn run_theme(command: Option<ThemeCommands>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_daemon_command(command: DaemonCommands) -> Result<()> {
+    use daemon::{is_daemon_running, log_path, run_daemon, socket_path, DaemonClient};
+
+    match command {
+        DaemonCommands::Start { foreground } => {
+            if is_daemon_running() {
+                println!("Daemon is already running.");
+                return Ok(());
+            }
+
+            if foreground {
+                println!("Starting daemon in foreground...");
+                println!("Press Ctrl+C to stop.");
+                run_daemon(true).map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+            } else {
+                println!("Starting daemon...");
+                run_daemon(false).map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+                std::thread::sleep(Duration::from_millis(500));
+
+                let mut started = false;
+                for _ in 0..3 {
+                    if is_daemon_running() {
+                        started = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+
+                if started {
+                    println!("Daemon started successfully.");
+                    println!("Socket: {:?}", socket_path());
+                } else {
+                    println!("Daemon may have failed to start. Check logs:");
+                    println!("  jolt daemon logs");
+                }
+            }
+        }
+        DaemonCommands::Stop => {
+            if !is_daemon_running() {
+                println!("Daemon is not running.");
+                return Ok(());
+            }
+
+            match DaemonClient::connect() {
+                Ok(mut client) => {
+                    client
+                        .shutdown()
+                        .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+                    println!("Daemon stopped.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to connect to daemon: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        DaemonCommands::Status => {
+            if !is_daemon_running() {
+                println!("Daemon is not running.");
+                return Ok(());
+            }
+
+            match DaemonClient::connect() {
+                Ok(mut client) => {
+                    let status = client
+                        .get_status()
+                        .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+                    println!("Daemon Status");
+                    println!("{}", "-".repeat(40));
+                    println!("Running:      yes");
+                    println!("Version:      {}", status.version);
+                    println!("Uptime:       {} seconds", status.uptime_secs);
+                    println!("Samples:      {}", status.sample_count);
+                    println!("Database:     {} bytes", status.database_size_bytes);
+                    if let Some(last) = status.last_sample_time {
+                        let dt = chrono::DateTime::from_timestamp(last, 0);
+                        if let Some(dt) = dt {
+                            println!("Last sample:  {}", dt.format("%Y-%m-%d %H:%M:%S UTC"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to connect to daemon: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        DaemonCommands::Logs { lines, follow } => {
+            let path = log_path();
+            if !path.exists() {
+                println!("No log file found at {:?}", path);
+                return Ok(());
+            }
+
+            if follow {
+                std::process::Command::new("tail")
+                    .args(["-f", "-n", &lines.to_string()])
+                    .arg(&path)
+                    .status()?;
+            } else {
+                std::process::Command::new("tail")
+                    .args(["-n", &lines.to_string()])
+                    .arg(&path)
+                    .status()?;
+            }
+        }
+        DaemonCommands::Install => {
+            let plist_path = dirs::home_dir()
+                .unwrap_or_default()
+                .join("Library/LaunchAgents/com.jolt.daemon.plist");
+
+            let exe_path = std::env::current_exe()?;
+
+            let plist_content = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jolt.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>daemon</string>
+        <string>start</string>
+        <string>--foreground</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardErrorPath</key>
+    <string>{}/jolt-daemon-stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>{}/jolt-daemon-stdout.log</string>
+</dict>
+</plist>"#,
+                exe_path.display(),
+                config::runtime_dir().display(),
+                config::runtime_dir().display()
+            );
+
+            if let Some(parent) = plist_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&plist_path, plist_content)?;
+
+            std::process::Command::new("launchctl")
+                .args(["load", "-w"])
+                .arg(&plist_path)
+                .status()?;
+
+            println!("Daemon installed and started.");
+            println!("Plist: {:?}", plist_path);
+            println!("\nTo uninstall: jolt daemon uninstall");
+        }
+        DaemonCommands::Uninstall => {
+            let plist_path = dirs::home_dir()
+                .unwrap_or_default()
+                .join("Library/LaunchAgents/com.jolt.daemon.plist");
+
+            if !plist_path.exists() {
+                println!("Daemon is not installed.");
+                return Ok(());
+            }
+
+            std::process::Command::new("launchctl")
+                .args(["unload"])
+                .arg(&plist_path)
+                .status()?;
+
+            std::fs::remove_file(&plist_path)?;
+            println!("Daemon uninstalled.");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_history_command(command: Option<HistoryCommands>) -> Result<()> {
+    use data::HistoryStore;
+
+    let cmd = command.unwrap_or(HistoryCommands::Summary {
+        period: "week".to_string(),
+    });
+
+    let store = match HistoryStore::open() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to open history database: {}", e);
+            eprintln!("Make sure the daemon has been running to collect data.");
+            std::process::exit(1);
+        }
+    };
+
+    match cmd {
+        HistoryCommands::Summary { period } => {
+            let (from, to) = get_date_range(&period);
+
+            println!("History Summary ({})", period);
+            println!("{}", "=".repeat(50));
+
+            match store.get_daily_stats(&from, &to) {
+                Ok(stats) if stats.is_empty() => {
+                    println!("No data for this period.");
+                    println!("\nMake sure the daemon is running to collect data:");
+                    println!("  jolt daemon start");
+                }
+                Ok(stats) => {
+                    let total_energy: f32 = stats.iter().map(|s| s.total_energy_wh).sum();
+                    let avg_power: f32 =
+                        stats.iter().map(|s| s.avg_power).sum::<f32>() / stats.len() as f32;
+                    let max_power: f32 = stats.iter().map(|s| s.max_power).fold(0.0, f32::max);
+
+                    println!("Days recorded:    {}", stats.len());
+                    println!(
+                        "Total energy:     {:.1} Wh ({:.2} kWh)",
+                        total_energy,
+                        total_energy / 1000.0
+                    );
+                    println!("Avg power:        {:.1} W", avg_power);
+                    println!("Max power:        {:.1} W", max_power);
+                }
+                Err(e) => {
+                    eprintln!("Error reading stats: {}", e);
+                }
+            }
+        }
+        HistoryCommands::Top { period, limit } => {
+            let (from, to) = get_date_range(&period);
+
+            println!("Top Power Consumers ({})", period);
+            println!("{}", "=".repeat(60));
+
+            match store.get_top_processes_range(&from, &to, limit) {
+                Ok(processes) if processes.is_empty() => {
+                    println!("No process data for this period.");
+                }
+                Ok(processes) => {
+                    println!(
+                        "{:<4} {:<30} {:>10} {:>10}",
+                        "Rank", "Process", "Avg CPU %", "Avg Mem MB"
+                    );
+                    println!("{}", "-".repeat(60));
+                    for (i, p) in processes.iter().enumerate() {
+                        println!(
+                            "{:<4} {:<30} {:>10.1} {:>10.1}",
+                            i + 1,
+                            truncate_str(&p.process_name, 28),
+                            p.avg_cpu,
+                            p.avg_memory_mb
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading processes: {}", e);
+                }
+            }
+        }
+        HistoryCommands::Export {
+            output,
+            format,
+            from,
+            to,
+            period,
+            include_samples,
+        } => {
+            let (from_date, to_date) = if let (Some(f), Some(t)) = (from, to) {
+                (f, t)
+            } else if let Some(p) = period {
+                get_date_range(&p)
+            } else {
+                get_date_range("week")
+            };
+
+            let daily_stats = store
+                .get_daily_stats(&from_date, &to_date)
+                .unwrap_or_default();
+            let top_processes = store
+                .get_top_processes_range(&from_date, &to_date, 20)
+                .unwrap_or_default();
+
+            let samples = if include_samples {
+                store
+                    .get_samples(
+                        chrono::NaiveDate::parse_from_str(&from_date, "%Y-%m-%d")
+                            .map(|d| {
+                                let time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+                                d.and_time(time).and_utc().timestamp()
+                            })
+                            .unwrap_or(0),
+                        chrono::NaiveDate::parse_from_str(&to_date, "%Y-%m-%d")
+                            .map(|d| {
+                                let time = chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap();
+                                d.and_time(time).and_utc().timestamp()
+                            })
+                            .unwrap_or(i64::MAX),
+                    )
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let content = match format.to_lowercase().as_str() {
+                "csv" => {
+                    export_to_csv(&from_date, &to_date, &daily_stats, &top_processes, &samples)
+                }
+                _ => export_to_json(&from_date, &to_date, &daily_stats, &top_processes, &samples),
+            };
+
+            if let Some(path) = output {
+                std::fs::write(&path, &content)?;
+                println!("Exported to: {}", path);
+            } else {
+                println!("{}", content);
+            }
+        }
+        HistoryCommands::Prune { older_than, yes } => {
+            let days = older_than.unwrap_or(30);
+            let before_date = data::history_store::days_ago_date_string(days);
+
+            let stats = store.get_stats().unwrap_or(data::DatabaseStats {
+                sample_count: 0,
+                hourly_count: 0,
+                daily_count: 0,
+                oldest_sample: None,
+                newest_sample: None,
+                size_bytes: 0,
+            });
+
+            println!("Current database stats:");
+            println!("  Samples: {}", stats.sample_count);
+            println!("  Size: {}", stats.size_formatted());
+            println!(
+                "\nWill delete data older than {} days (before {})",
+                days, before_date
+            );
+
+            if !yes {
+                print!("Proceed? [y/N] ");
+                std::io::Write::flush(&mut std::io::stdout())?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            let before_ts = chrono::NaiveDate::parse_from_str(&before_date, "%Y-%m-%d")
+                .map(|d| {
+                    let time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+                    d.and_time(time).and_utc().timestamp()
+                })
+                .unwrap_or(0);
+
+            let deleted_samples = store.delete_samples_before(before_ts).unwrap_or(0);
+            let deleted_hourly = store.delete_hourly_stats_before(before_ts).unwrap_or(0);
+            let deleted_daily = store.delete_daily_stats_before(&before_date).unwrap_or(0);
+            let deleted_processes = store
+                .delete_daily_processes_before(&before_date)
+                .unwrap_or(0);
+
+            println!("\nDeleted:");
+            println!("  {} samples", deleted_samples);
+            println!("  {} hourly stats", deleted_hourly);
+            println!("  {} daily stats", deleted_daily);
+            println!("  {} process entries", deleted_processes);
+
+            if let Err(e) = store.vacuum() {
+                eprintln!("Warning: vacuum failed: {}", e);
+            } else {
+                println!("\nDatabase vacuumed to reclaim space.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn get_date_range(period: &str) -> (String, String) {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    match period.to_lowercase().as_str() {
+        "today" => (today.clone(), today),
+        "week" => (data::history_store::days_ago_date_string(7), today),
+        "month" => (data::history_store::days_ago_date_string(30), today),
+        "all" => ("2000-01-01".to_string(), today),
+        _ => (data::history_store::days_ago_date_string(7), today),
+    }
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
+    }
+}
+
+fn export_to_json(
+    from: &str,
+    to: &str,
+    daily_stats: &[data::DailyStat],
+    top_processes: &[data::DailyTopProcess],
+    samples: &[data::Sample],
+) -> String {
+    let export_data = serde_json::json!({
+        "period": {
+            "from": from,
+            "to": to,
+        },
+        "daily_stats": daily_stats,
+        "top_processes": top_processes,
+        "samples": samples,
+    });
+    serde_json::to_string_pretty(&export_data).unwrap_or_default()
+}
+
+fn export_to_csv(
+    from: &str,
+    to: &str,
+    daily_stats: &[data::DailyStat],
+    top_processes: &[data::DailyTopProcess],
+    samples: &[data::Sample],
+) -> String {
+    let mut output = String::new();
+
+    output.push_str(&format!("# Jolt History Export: {} to {}\n\n", from, to));
+
+    output.push_str("# Daily Statistics\n");
+    output
+        .push_str("date,avg_power_w,max_power_w,total_energy_wh,screen_on_hours,charging_hours\n");
+    for stat in daily_stats {
+        output.push_str(&format!(
+            "{},{:.2},{:.2},{:.2},{:.2},{:.2}\n",
+            stat.date,
+            stat.avg_power,
+            stat.max_power,
+            stat.total_energy_wh,
+            stat.screen_on_hours,
+            stat.charging_hours
+        ));
+    }
+
+    output.push_str("\n# Top Processes\n");
+    output.push_str(
+        "process_name,avg_power_w,total_energy_wh,avg_cpu_percent,avg_memory_mb,sample_count\n",
+    );
+    for proc in top_processes {
+        output.push_str(&format!(
+            "{},{:.2},{:.2},{:.2},{:.2},{}\n",
+            escape_csv(&proc.process_name),
+            proc.avg_power,
+            proc.total_energy_wh,
+            proc.avg_cpu,
+            proc.avg_memory_mb,
+            proc.sample_count
+        ));
+    }
+
+    if !samples.is_empty() {
+        output.push_str("\n# Raw Samples\n");
+        output
+            .push_str("timestamp,battery_percent,power_watts,cpu_power,gpu_power,charging_state\n");
+        for sample in samples {
+            let charging = match sample.charging_state {
+                data::ChargingState::Discharging => "discharging",
+                data::ChargingState::Charging => "charging",
+                data::ChargingState::Full => "full",
+                data::ChargingState::Unknown => "unknown",
+            };
+            output.push_str(&format!(
+                "{},{:.1},{:.2},{:.2},{:.2},{}\n",
+                sample.timestamp,
+                sample.battery_percent,
+                sample.power_watts,
+                sample.cpu_power,
+                sample.gpu_power,
+                charging
+            ));
+        }
+    }
+
+    output
+}
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        let escaped = s.replace('"', "\"\"").replace('\n', " ");
+        format!("\"{}\"", escaped)
+    } else {
+        s.to_string()
+    }
 }
