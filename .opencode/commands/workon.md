@@ -5,8 +5,6 @@ description: Begin working on a plan issue by number or search query
 <command-instruction>
 BEFORE ANYTHING ELSE, ASK THE USER FOR AN ISSUE NUMBER. THEN USE THAT PR NUMBER FOR THE REAMINING WORK. DO NOT PROCEED WITHOUT AN ISSUE NUMBER.
 
-DO NOT LIST THE ISSUES, FETCH THE SPECIFIC ISSUE NUMBER.
-
 Begin working on a plan issue. Accepts an issue number or a search query to find the issue.
 
 ## Arguments
@@ -64,7 +62,7 @@ Begin working on a plan issue. Accepts an issue number or a search query to find
 
 <current-context>
 <open-issues>
-!`gh issue list --state open --json number,title,labels --jq '.[] | "- #\(.number) \(.title) [\(.labels | map(.name) | join(", "))]"' 2>/dev/null || echo "no issues"`
+!`gh issue list --state open --json number,title --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || echo "no issues"`
 </open-issues>
 <in-progress-issues>
 !`gh issue list --label "in-progress" --json number,title --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || echo "none"`

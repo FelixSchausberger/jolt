@@ -65,7 +65,7 @@ The scratchpad file MUST follow this format to work with `/workon`:
 
 <current-context>
 <open-issues>
-!`gh issue list --state open --limit 10 --json number,title,labels --jq '.[] | "- #\(.number) \(.title) [\(.labels | map(.name) | join(", "))]"' 2>/dev/null || echo "no issues"`
+!`gh issue list --state open --limit 10 --json number,title --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || echo "no issues"`
 </open-issues>
 <scratchpad-plans>
 !`ls -1 ./scratchpad/plan-*.md 2>/dev/null || echo "no drafts"`

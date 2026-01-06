@@ -5,8 +5,6 @@ description: Update an existing plan with progress, always including a continuat
 <command-instruction>
 BEFORE ANYTHING ELSE, ASK THE USER FOR AN ISSUE NUMBER. THEN USE THAT PR NUMBER FOR THE REAMINING WORK. DO NOT PROCEED WITHOUT AN ISSUE NUMBER.
 
-DO NOT LIST THE ISSUES, FETCH THE SPECIFIC ISSUE NUMBER.
-
 Update an existing plan with progress. Always includes a continuation prompt.
 
 ## Procedure
