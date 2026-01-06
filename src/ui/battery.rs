@@ -21,13 +21,28 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &ThemeColors) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(1)])
-        .split(inner);
+    if inner.height == 0 {
+        return;
+    }
 
-    render_battery_gauge(frame, chunks[0], app, theme);
-    render_battery_info(frame, chunks[1], app, theme);
+    let info_card_height = if inner.height >= 4 { 3 } else { 0 };
+    let gauge_height = inner.height.saturating_sub(info_card_height);
+
+    if gauge_height > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(gauge_height),
+                Constraint::Length(info_card_height),
+            ])
+            .split(inner);
+
+        render_battery_gauge(frame, chunks[0], app, theme);
+
+        if info_card_height > 0 {
+            render_battery_info_card(frame, chunks[1], app, theme);
+        }
+    }
 }
 
 fn render_battery_gauge(frame: &mut Frame, area: Rect, app: &App, theme: &ThemeColors) {
@@ -67,24 +82,33 @@ struct ThickGauge {
 
 impl Widget for ThickGauge {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 3 || area.width < 10 {
+        if area.width < 10 || area.height == 0 {
             return;
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.border_color))
-            .style(Style::default().bg(self.bg_color));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
+        let (inner, has_border) = if area.height >= 3 {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(self.border_color))
+                .style(Style::default().bg(self.bg_color));
+            let inner = block.inner(area);
+            block.render(area, buf);
+            (inner, true)
+        } else {
+            (area, false)
+        };
 
         if inner.width < 8 || inner.height == 0 {
             return;
         }
 
-        let bar_start = inner.x + 3;
-        let bar_end = inner.x + inner.width - 5;
+        let show_labels = inner.width >= 15 && has_border;
+        let bar_start = if show_labels { inner.x + 3 } else { inner.x };
+        let bar_end = if show_labels {
+            inner.x + inner.width - 5
+        } else {
+            inner.x + inner.width
+        };
         let bar_width = bar_end.saturating_sub(bar_start);
 
         if bar_width < 5 {
@@ -95,41 +119,46 @@ impl Widget for ThickGauge {
 
         for y in inner.y..inner.y + inner.height {
             for x in bar_start..bar_end {
-                let cell = buf.cell_mut((x, y)).unwrap();
-                let rel_x = x - bar_start;
-                let is_last_filled = rel_x == filled_width.saturating_sub(1) && filled_width > 0;
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    let rel_x = x - bar_start;
+                    let is_last_filled =
+                        rel_x == filled_width.saturating_sub(1) && filled_width > 0;
 
-                if rel_x < filled_width {
-                    if is_last_filled && filled_width < bar_width {
-                        cell.set_char('▌');
+                    if rel_x < filled_width {
+                        if is_last_filled && filled_width < bar_width {
+                            cell.set_char('▌');
+                        } else {
+                            cell.set_char('█');
+                        }
+                        cell.set_fg(self.filled_color);
                     } else {
-                        cell.set_char('█');
+                        cell.set_char(' ');
                     }
-                    cell.set_fg(self.filled_color);
-                } else {
-                    cell.set_char(' ');
                 }
             }
         }
 
         let label_y = inner.y + inner.height / 2;
 
-        for (i, ch) in "0%".chars().enumerate() {
-            let x = inner.x + i as u16;
-            if x < bar_start {
-                let cell = buf.cell_mut((x, label_y)).unwrap();
-                cell.set_char(ch);
-                cell.set_fg(self.border_color);
+        if show_labels {
+            for (i, ch) in "0%".chars().enumerate() {
+                let x = inner.x + i as u16;
+                if x < bar_start {
+                    if let Some(cell) = buf.cell_mut((x, label_y)) {
+                        cell.set_char(ch);
+                        cell.set_fg(self.border_color);
+                    }
+                }
             }
-        }
 
-        let end_label = "100%";
-        for (i, ch) in end_label.chars().enumerate() {
-            let x = bar_end + i as u16;
-            if x < inner.x + inner.width {
-                let cell = buf.cell_mut((x, label_y)).unwrap();
-                cell.set_char(ch);
-                cell.set_fg(self.border_color);
+            for (i, ch) in "100%".chars().enumerate() {
+                let x = bar_end + i as u16;
+                if x < inner.x + inner.width {
+                    if let Some(cell) = buf.cell_mut((x, label_y)) {
+                        cell.set_char(ch);
+                        cell.set_fg(self.border_color);
+                    }
+                }
             }
         }
 
@@ -139,25 +168,23 @@ impl Widget for ThickGauge {
         for (i, ch) in label_with_padding.chars().enumerate() {
             let x = label_x + i as u16;
             if x >= bar_start && x < bar_end {
-                let cell = buf.cell_mut((x, label_y)).unwrap();
-                cell.set_char(ch);
-                cell.set_fg(self.label_color);
-                cell.set_bg(self.bg_color);
-                cell.set_style(Style::default().add_modifier(Modifier::BOLD));
+                if let Some(cell) = buf.cell_mut((x, label_y)) {
+                    cell.set_char(ch);
+                    cell.set_fg(self.label_color);
+                    cell.set_bg(self.bg_color);
+                    cell.set_style(Style::default().add_modifier(Modifier::BOLD));
+                }
             }
         }
     }
 }
 
-fn render_battery_info(frame: &mut Frame, area: Rect, app: &App, theme: &ThemeColors) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(35),
-            Constraint::Percentage(30),
-            Constraint::Percentage(35),
-        ])
-        .split(area);
+fn render_battery_info_card(frame: &mut Frame, area: Rect, app: &App, theme: &ThemeColors) {
+    if area.height == 0 || area.width < 20 {
+        return;
+    }
+
+    let inner = area;
 
     let state_icon = match app.battery.state() {
         ChargeState::Charging => "⚡",
@@ -167,71 +194,164 @@ fn render_battery_info(frame: &mut Frame, area: Rect, app: &App, theme: &ThemeCo
         ChargeState::Unknown => "?",
     };
 
-    let power_info = if app.battery.is_charging() {
-        if let Some(watts) = app.battery.charging_watts() {
-            let charger = app
-                .battery
+    let (time_label, time_value) = match app.battery.state() {
+        ChargeState::Charging => (
+            "Time to full:",
+            app.battery
+                .time_remaining_formatted()
+                .unwrap_or_else(|| "Calculating...".to_string()),
+        ),
+        ChargeState::Discharging => (
+            "Runtime:",
+            app.battery
+                .time_remaining_formatted()
+                .unwrap_or_else(|| "Calculating...".to_string()),
+        ),
+        ChargeState::Full => ("Status:", "Charged".to_string()),
+        ChargeState::NotCharging => ("Status:", "Not charging".to_string()),
+        ChargeState::Unknown => ("Status:", "—".to_string()),
+    };
+
+    let power_text = if app.battery.is_charging() {
+        app.battery.charging_watts().map(|w| {
+            app.battery
                 .charger_watts()
-                .map_or(String::new(), |w| format!("/{}W", w));
-            format!(" +{:.1}W{}", watts, charger)
-        } else {
-            String::new()
-        }
-    } else if let Some(watts) = app.battery.discharge_watts() {
-        format!(" -{:.1}W", watts)
+                .map_or(format!("{:.1}W", w), |c| format!("{:.1}W/{}W", w, c))
+        })
     } else {
-        String::new()
+        app.battery.discharge_watts().map(|w| format!("{:.1}W", w))
     };
 
-    let state_text = format!("{} {}{}", state_icon, app.battery.state_label(), power_info);
-
-    let time_text = match app.battery.state() {
-        ChargeState::Charging => app
-            .battery
-            .time_remaining_formatted()
-            .map(|t| format!("Full in {}", t))
-            .unwrap_or_else(|| "Calculating...".to_string()),
-        ChargeState::Discharging => app
-            .battery
-            .time_remaining_formatted()
-            .map(|t| format!("{} remaining", t))
-            .unwrap_or_else(|| "Calculating...".to_string()),
-        ChargeState::Full => "Fully charged".to_string(),
-        ChargeState::NotCharging => "Plugged in".to_string(),
-        ChargeState::Unknown => String::new(),
+    let health_color = if app.battery.health_percent() >= 80.0 {
+        theme.success
+    } else if app.battery.health_percent() >= 50.0 {
+        theme.warning
+    } else {
+        theme.danger
     };
 
-    let health_text = format!(
-        "{:.1}Wh │ {:.0}% health │ {} cycles",
-        app.battery.max_capacity_wh(),
+    let cycles_text = app
+        .battery
+        .cycle_count()
+        .map_or("—".to_string(), |c| c.to_string());
+
+    let single_line = build_single_line(
+        state_icon,
+        app.battery.state_label(),
+        time_label,
+        &time_value,
+        power_text.as_deref(),
         app.battery.health_percent(),
-        app.battery
-            .cycle_count()
-            .map_or("?".to_string(), |c| c.to_string())
+        &cycles_text,
+        app.battery.max_capacity_wh(),
+        theme,
+        health_color,
     );
 
-    let state_style = match app.battery.state() {
-        ChargeState::Charging => Style::default().fg(theme.success),
-        ChargeState::Discharging => Style::default().fg(theme.warning),
-        ChargeState::Full => Style::default().fg(theme.success),
-        _ => Style::default().fg(theme.accent),
-    };
+    let single_line_width: usize = single_line.spans.iter().map(|s| s.content.len()).sum();
 
-    let left = Paragraph::new(Line::from(vec![Span::styled(state_text, state_style)]));
+    if inner.width as usize >= single_line_width || inner.height < 3 {
+        let centered = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(inner)[1];
+        frame.render_widget(Paragraph::new(single_line).centered(), centered);
+    } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
 
-    let center = Paragraph::new(Line::from(vec![Span::styled(
-        time_text,
-        Style::default().fg(theme.fg),
-    )]))
-    .centered();
+        let row1 = Line::from(vec![
+            Span::styled(
+                format!("{} ", state_icon),
+                Style::default().fg(theme.accent),
+            ),
+            Span::styled(
+                app.battery.state_label(),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  │  ", Style::default().fg(theme.border)),
+            Span::styled(format!("{} ", time_label), Style::default().fg(theme.muted)),
+            Span::styled(&time_value, Style::default().fg(theme.fg)),
+            Span::styled(
+                power_text.map_or(String::new(), |p| format!("  │  {}", p)),
+                Style::default().fg(theme.accent),
+            ),
+        ]);
 
-    let right = Paragraph::new(Line::from(vec![Span::styled(
-        health_text,
-        Style::default().fg(theme.muted),
-    )]))
-    .right_aligned();
+        let row2 = Line::from(vec![
+            Span::styled("Health: ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{:.0}%", app.battery.health_percent()),
+                Style::default().fg(health_color),
+            ),
+            Span::styled("  │  ", Style::default().fg(theme.border)),
+            Span::styled("Cycles: ", Style::default().fg(theme.muted)),
+            Span::styled(&cycles_text, Style::default().fg(theme.fg)),
+            Span::styled("  │  ", Style::default().fg(theme.border)),
+            Span::styled("Capacity: ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{:.1}Wh", app.battery.max_capacity_wh()),
+                Style::default().fg(theme.fg),
+            ),
+        ]);
 
-    frame.render_widget(left, chunks[0]);
-    frame.render_widget(center, chunks[1]);
-    frame.render_widget(right, chunks[2]);
+        frame.render_widget(Paragraph::new(row1).centered(), rows[0]);
+        frame.render_widget(Paragraph::new(row2).centered(), rows[2]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_single_line<'a>(
+    icon: &'a str,
+    state: &'a str,
+    time_label: &'a str,
+    time_value: &'a str,
+    power: Option<&'a str>,
+    health: f32,
+    cycles: &'a str,
+    capacity: f32,
+    theme: &ThemeColors,
+    health_color: ratatui::style::Color,
+) -> Line<'a> {
+    let mut spans = vec![
+        Span::styled(format!("{} ", icon), Style::default().fg(theme.accent)),
+        Span::styled(
+            state,
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  │  ", Style::default().fg(theme.border)),
+        Span::styled(format!("{} ", time_label), Style::default().fg(theme.muted)),
+        Span::styled(time_value, Style::default().fg(theme.fg)),
+    ];
+
+    if let Some(p) = power {
+        spans.push(Span::styled(
+            format!("  │  {}", p),
+            Style::default().fg(theme.accent),
+        ));
+    }
+
+    spans.extend([
+        Span::styled("  │  ", Style::default().fg(theme.border)),
+        Span::styled(format!("{:.0}%", health), Style::default().fg(health_color)),
+        Span::styled(" health", Style::default().fg(theme.muted)),
+        Span::styled("  │  ", Style::default().fg(theme.border)),
+        Span::styled(cycles, Style::default().fg(theme.fg)),
+        Span::styled(" cycles", Style::default().fg(theme.muted)),
+        Span::styled("  │  ", Style::default().fg(theme.border)),
+        Span::styled(format!("{:.1}", capacity), Style::default().fg(theme.fg)),
+        Span::styled("Wh", Style::default().fg(theme.muted)),
+    ]);
+
+    Line::from(spans)
 }

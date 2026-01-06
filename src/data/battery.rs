@@ -214,23 +214,46 @@ impl BatteryData {
     }
 
     pub fn time_remaining(&self) -> Option<Duration> {
-        match self.state {
+        let system_estimate = match self.state {
             ChargeState::Charging => self.time_to_full,
             ChargeState::Discharging => self.time_to_empty,
             _ => None,
+        };
+
+        if system_estimate.is_some() {
+            return system_estimate;
         }
+
+        if self.state == ChargeState::Discharging {
+            if let Some(watts) = self.discharge_watts() {
+                if watts > 0.1 {
+                    let capacity_wh = self.max_capacity_wh();
+                    let current_wh = capacity_wh * (self.current_charge / 100.0);
+                    let hours_remaining = current_wh / watts;
+                    let secs = (hours_remaining * 3600.0) as u64;
+                    if secs > 0 && secs < 86400 {
+                        return Some(Duration::from_secs(secs));
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     pub fn time_remaining_formatted(&self) -> Option<String> {
-        self.time_remaining().map(|d| {
+        self.time_remaining().and_then(|d| {
             let total_mins = d.as_secs() / 60;
+            if total_mins == 0 {
+                return None;
+            }
             let hours = total_mins / 60;
             let mins = total_mins % 60;
 
             if hours > 0 {
-                format!("{}h {}m", hours, mins)
+                Some(format!("{}h {}m", hours, mins))
             } else {
-                format!("{}m", mins)
+                Some(format!("{}m", mins))
             }
         })
     }
