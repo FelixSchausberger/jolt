@@ -244,6 +244,7 @@ fn render_battery_info_card(frame: &mut Frame, area: Rect, app: &App, theme: &Th
         app.battery.health_percent(),
         &cycles_text,
         app.battery.max_capacity_wh(),
+        app.battery.design_capacity_wh(),
         theme,
         health_color,
     );
@@ -294,15 +295,17 @@ fn render_battery_info_card(frame: &mut Frame, area: Rect, app: &App, theme: &Th
                 format!("{:.0}%", app.battery.health_percent()),
                 Style::default().fg(health_color),
             ),
+            Span::styled(
+                format!(
+                    " ({:.1}/{:.1}Wh)",
+                    app.battery.max_capacity_wh(),
+                    app.battery.design_capacity_wh()
+                ),
+                Style::default().fg(theme.muted),
+            ),
             Span::styled("  │  ", Style::default().fg(theme.border)),
             Span::styled("Cycles: ", Style::default().fg(theme.muted)),
             Span::styled(&cycles_text, Style::default().fg(theme.fg)),
-            Span::styled("  │  ", Style::default().fg(theme.border)),
-            Span::styled("Capacity: ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{:.1}Wh", app.battery.max_capacity_wh()),
-                Style::default().fg(theme.fg),
-            ),
         ]);
 
         frame.render_widget(Paragraph::new(row1).centered(), rows[0]);
@@ -320,6 +323,7 @@ fn build_single_line<'a>(
     health: f32,
     cycles: &'a str,
     capacity: f32,
+    design_capacity: f32,
     theme: &ThemeColors,
     health_color: ratatui::style::Color,
 ) -> Line<'a> {
@@ -344,13 +348,13 @@ fn build_single_line<'a>(
     spans.extend([
         Span::styled("  │  ", Style::default().fg(theme.border)),
         Span::styled(format!("{:.0}%", health), Style::default().fg(health_color)),
-        Span::styled(" health", Style::default().fg(theme.muted)),
+        Span::styled(
+            format!(" ({:.0}/{:.0}Wh)", capacity, design_capacity),
+            Style::default().fg(theme.muted),
+        ),
         Span::styled("  │  ", Style::default().fg(theme.border)),
         Span::styled(cycles, Style::default().fg(theme.fg)),
         Span::styled(" cycles", Style::default().fg(theme.muted)),
-        Span::styled("  │  ", Style::default().fg(theme.border)),
-        Span::styled(format!("{:.1}", capacity), Style::default().fg(theme.fg)),
-        Span::styled("Wh", Style::default().fg(theme.muted)),
     ]);
 
     Line::from(spans)

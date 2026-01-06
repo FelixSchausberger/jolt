@@ -199,6 +199,10 @@ impl BatteryData {
         self.max_capacity * (self.voltage_mv as f32 / 1000.0) / 1000.0
     }
 
+    pub fn design_capacity_wh(&self) -> f32 {
+        self.design_capacity * (self.voltage_mv as f32 / 1000.0) / 1000.0
+    }
+
     pub fn state(&self) -> ChargeState {
         self.state
     }
