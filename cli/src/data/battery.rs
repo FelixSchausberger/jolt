@@ -2,6 +2,8 @@ use color_eyre::eyre::Result;
 use std::process::Command;
 use std::time::Duration;
 
+use crate::daemon::{BatterySnapshot, BatteryState as ProtocolBatteryState};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChargeState {
     Charging,
@@ -291,6 +293,18 @@ impl BatteryData {
         self.charger_watts
     }
 
+    pub fn voltage_mv(&self) -> u32 {
+        self.voltage_mv
+    }
+
+    pub fn amperage_ma(&self) -> i32 {
+        self.amperage_ma
+    }
+
+    pub fn external_connected(&self) -> bool {
+        self.external_connected
+    }
+
     pub fn discharge_watts(&self) -> Option<f32> {
         if self.state == ChargeState::Discharging && self.amperage_ma < 0 {
             let watts =
@@ -299,6 +313,44 @@ impl BatteryData {
         } else {
             None
         }
+    }
+
+    pub fn update_from_snapshot(&mut self, snapshot: &BatterySnapshot) {
+        self.current_charge = snapshot.charge_percent;
+        self.health_percent = snapshot.health_percent;
+        self.max_capacity =
+            snapshot.max_capacity_wh * 1000.0 / (snapshot.voltage_mv as f32 / 1000.0);
+        self.design_capacity =
+            snapshot.design_capacity_wh * 1000.0 / (snapshot.voltage_mv as f32 / 1000.0);
+        self.voltage_mv = snapshot.voltage_mv;
+        self.amperage_ma = snapshot.amperage_ma;
+        self.cycle_count = snapshot.cycle_count;
+        self.external_connected = snapshot.external_connected;
+        self.charger_watts = snapshot.charger_watts;
+
+        self.state = match snapshot.state {
+            ProtocolBatteryState::Charging => ChargeState::Charging,
+            ProtocolBatteryState::Discharging => ChargeState::Discharging,
+            ProtocolBatteryState::Full => ChargeState::Full,
+            ProtocolBatteryState::NotCharging => ChargeState::NotCharging,
+            ProtocolBatteryState::Unknown => ChargeState::Unknown,
+        };
+
+        self.time_to_full = if self.state == ChargeState::Charging {
+            snapshot
+                .time_remaining_mins
+                .map(|m| Duration::from_secs(m * 60))
+        } else {
+            None
+        };
+
+        self.time_to_empty = if self.state == ChargeState::Discharging {
+            snapshot
+                .time_remaining_mins
+                .map(|m| Duration::from_secs(m * 60))
+        } else {
+            None
+        };
     }
 }
 
