@@ -381,27 +381,26 @@ fn run_tui_loop(
     let mut app = App::new(user_config, refresh_from_cli)?;
 
     loop {
-        let tick_rate = Duration::from_millis(app.refresh_ms);
+        app.tick()?;
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        let should_tick = if event::poll(tick_rate)? {
+        let poll_timeout = if app.using_daemon_data {
+            Duration::from_millis(10)
+        } else {
+            Duration::from_millis(app.refresh_ms)
+        };
+
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let action = input::handle_key(&app, key);
                     if !app.handle_action(action) {
                         break;
                     }
-                    false
                 }
-                Event::Resize(_, _) => false,
-                _ => false,
+                Event::Resize(_, _) => {}
+                _ => {}
             }
-        } else {
-            true
-        };
-
-        if should_tick {
-            app.tick()?;
         }
     }
 

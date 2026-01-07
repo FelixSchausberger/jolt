@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::config::{runtime_dir, HistoryConfig, UserConfig};
 use crate::daemon::protocol::{
@@ -316,7 +316,9 @@ impl DaemonState {
                 }
             }
             DaemonRequest::Shutdown => DaemonResponse::Ok,
-            DaemonRequest::Subscribe | DaemonRequest::Unsubscribe => {
+            DaemonRequest::Subscribe
+            | DaemonRequest::Unsubscribe
+            | DaemonRequest::SetBroadcastInterval { .. } => {
                 DaemonResponse::Error("Handled separately".to_string())
             }
         }
@@ -364,18 +366,28 @@ async fn client_writer_task(
     mut response_rx: mpsc::Receiver<DaemonResponse>,
 ) {
     while let Some(response) = response_rx.recv().await {
+        let is_data_update = matches!(response, DaemonResponse::DataUpdate(_));
         let json = match response.to_json() {
             Ok(j) => j,
-            Err(_) => continue,
+            Err(e) => {
+                warn!(error = %e, "Failed to serialize response");
+                continue;
+            }
         };
-        if writer
-            .write_all(format!("{}\n", json).as_bytes())
-            .await
-            .is_err()
-        {
+        let json_len = json.len();
+        if let Err(e) = writer.write_all(format!("{}\n", json).as_bytes()).await {
+            debug!(error = %e, "Write failed, closing connection");
             break;
         }
+        if let Err(e) = writer.flush().await {
+            debug!(error = %e, "Flush failed, closing connection");
+            break;
+        }
+        if is_data_update {
+            trace!(json_len, "Sent DataUpdate to client");
+        }
     }
+    debug!("Client writer task ending");
 }
 
 pub fn run_daemon(
@@ -430,23 +442,23 @@ async fn run_daemon_async(socket: std::path::PathBuf) -> Result<()> {
     let sample_interval = Duration::from_secs(state.config.sample_interval_secs);
     let aggregation_interval = Duration::from_secs(3600);
     let prune_interval = Duration::from_secs(86400);
-    let broadcast_interval = Duration::from_secs(1);
+    let mut broadcast_interval_ms = user_config.refresh_ms;
 
     debug!(
         sample_interval_secs = state.config.sample_interval_secs,
-        "Running initial aggregation"
+        broadcast_interval_ms, "Running initial aggregation"
     );
     state.run_aggregation();
 
     let mut sample_tick = tokio::time::interval(sample_interval);
     let mut aggregation_tick = tokio::time::interval(aggregation_interval);
     let mut prune_tick = tokio::time::interval(prune_interval);
-    let mut broadcast_tick = tokio::time::interval(broadcast_interval);
+    let broadcast_sleep = tokio::time::sleep(Duration::from_millis(broadcast_interval_ms));
+    tokio::pin!(broadcast_sleep);
 
     sample_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     aggregation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     prune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    broadcast_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let (msg_tx, mut msg_rx) = mpsc::channel::<(ClientId, ClientMessage)>(256);
     let mut clients: HashMap<ClientId, ClientHandle> = HashMap::new();
@@ -466,24 +478,36 @@ async fn run_daemon_async(socket: std::path::PathBuf) -> Result<()> {
             _ = prune_tick.tick() => {
                 state.run_prune();
             }
-            _ = broadcast_tick.tick() => {
+            () = &mut broadcast_sleep => {
+                broadcast_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(broadcast_interval_ms));
+
                 let subscriber_count: usize = clients.values().filter(|c| c.is_subscriber).count();
                 if subscriber_count > 0 {
+                    if let Err(e) = state.refresh() {
+                        error!(error = %e, "Error refreshing data for broadcast");
+                    }
                     let snapshot = state.create_snapshot();
                     let update = DaemonResponse::DataUpdate(snapshot);
 
+                    let mut sent_count = 0;
                     let mut disconnected = Vec::new();
                     for (id, client) in &clients {
-                        if client.is_subscriber
-                            && client.response_tx.send(update.clone()).await.is_err()
-                        {
-                            disconnected.push(*id);
+                        if client.is_subscriber {
+                            if client.response_tx.send(update.clone()).await.is_err() {
+                                disconnected.push(*id);
+                            } else {
+                                sent_count += 1;
+                            }
                         }
+                    }
+                    if sent_count > 0 {
+                        trace!(sent_count, "Broadcast DataUpdate to subscribers");
                     }
                     for id in disconnected {
                         clients.remove(&id);
                         debug!(client_id = id, "Removed disconnected subscriber");
                     }
+                    tokio::task::yield_now().await;
                 }
             }
             result = listener.accept() => {
@@ -552,6 +576,15 @@ async fn run_daemon_async(socket: std::path::PathBuf) -> Result<()> {
                             DaemonRequest::Shutdown => {
                                 info!("Shutdown requested by client");
                                 shutdown_requested = true;
+                                DaemonResponse::Ok
+                            }
+                            DaemonRequest::SetBroadcastInterval { interval_ms } => {
+                                let new_interval = (*interval_ms).max(100);
+                                if new_interval != broadcast_interval_ms {
+                                    broadcast_interval_ms = new_interval;
+                                    broadcast_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(broadcast_interval_ms));
+                                    info!(broadcast_interval_ms, "Broadcast interval updated");
+                                }
                                 DaemonResponse::Ok
                             }
                             _ => {

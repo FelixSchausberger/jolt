@@ -148,7 +148,7 @@ impl Default for UserConfig {
             refresh_ms: 2000,
             low_power_mode: false,
             show_graph: true,
-            graph_metric: GraphMetric::Power,
+            graph_metric: GraphMetric::Merged,
             process_count: 50,
             energy_threshold: 0.5,
             merge_mode: true,
@@ -163,9 +163,11 @@ impl Default for UserConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum GraphMetric {
-    #[default]
     Power,
     Battery,
+    Split,
+    #[default]
+    Merged,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -316,9 +318,22 @@ impl RuntimeConfig {
     pub fn theme_id(&self) -> &str {
         &self.current_theme.id
     }
+
+    pub fn refresh_system_theme(&mut self) -> bool {
+        if self.user_config.appearance != AppearanceMode::Auto {
+            return false;
+        }
+        let new_is_dark = detect_system_dark_mode();
+        if new_is_dark != self.system_is_dark {
+            self.system_is_dark = new_is_dark;
+            true
+        } else {
+            false
+        }
+    }
 }
 
-fn detect_system_dark_mode() -> bool {
+pub fn detect_system_dark_mode() -> bool {
     Command::new("defaults")
         .args(["read", "-g", "AppleInterfaceStyle"])
         .output()

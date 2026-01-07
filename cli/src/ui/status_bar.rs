@@ -98,6 +98,17 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme
         ]);
     }
 
+    let refresh_display = if app.refresh_ms >= 1000 {
+        format!("{:.1}s", app.refresh_ms as f64 / 1000.0)
+    } else {
+        format!("{}ms", app.refresh_ms)
+    };
+    right_spans.extend(vec![
+        Span::styled("refresh: ", Style::default().fg(theme.muted)),
+        Span::styled(refresh_display, Style::default().fg(theme.fg)),
+        Span::styled(" │ ", Style::default().fg(theme.border)),
+    ]);
+
     right_spans.extend(vec![
         Span::styled(keys::HISTORY, Style::default().fg(theme.accent)),
         Span::styled(" history ", Style::default().fg(theme.muted)),

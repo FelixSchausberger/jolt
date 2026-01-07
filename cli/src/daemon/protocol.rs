@@ -130,6 +130,9 @@ pub enum DaemonRequest {
     KillProcess {
         pid: u32,
     },
+    SetBroadcastInterval {
+        interval_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

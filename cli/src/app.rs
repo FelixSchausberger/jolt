@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use color_eyre::eyre::Result;
 use tracing::{debug, info};
 
 use crate::config::{GraphMetric, RuntimeConfig, UserConfig};
 
 const FORECAST_REFRESH_TICKS: u32 = 10;
+const THEME_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 use crate::daemon::{DaemonClient, DaemonStatus, DataSnapshot};
 use crate::data::{
     BatteryData, DailyStat, DailyTopProcess, ForecastData, HistoryData, HistoryMetric, HourlyStat,
@@ -200,6 +203,7 @@ pub struct App {
     last_daemon_update: Option<std::time::Instant>,
     reconnect_attempts: u32,
     last_reconnect_attempt: Option<std::time::Instant>,
+    last_theme_check: std::time::Instant,
 }
 
 impl App {
@@ -211,6 +215,8 @@ impl App {
         let graph_metric = match user_config.graph_metric {
             GraphMetric::Power => HistoryMetric::Power,
             GraphMetric::Battery => HistoryMetric::Battery,
+            GraphMetric::Split => HistoryMetric::Split,
+            GraphMetric::Merged => HistoryMetric::Merged,
         };
         let excluded = user_config
             .effective_excluded_processes()
@@ -267,6 +273,7 @@ impl App {
             last_daemon_update: None,
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
+            last_theme_check: std::time::Instant::now(),
         };
 
         app.try_connect_daemon();
@@ -301,6 +308,7 @@ impl App {
                 self.daemon_subscription = Some(client);
                 self.using_daemon_data = true;
                 self.daemon_connected = true;
+                self.sync_daemon_broadcast_interval();
                 return true;
             }
         }
@@ -350,32 +358,41 @@ impl App {
     }
 
     pub fn tick(&mut self) -> Result<()> {
-        self.tick_count = self.tick_count.wrapping_add(1);
-
-        if self.using_daemon_data {
-            self.tick_from_daemon()?;
-        } else {
-            self.tick_from_local()?;
+        if self.last_theme_check.elapsed() >= THEME_CHECK_INTERVAL {
+            self.config.refresh_system_theme();
+            self.last_theme_check = std::time::Instant::now();
         }
 
-        self.history.record(
-            self.battery.charge_percent(),
-            self.power.total_power_watts(),
-        );
+        let data_updated = if self.using_daemon_data {
+            self.tick_from_daemon()?
+        } else {
+            self.tick_from_local()?;
+            true
+        };
 
-        if self.tick_count.is_multiple_of(FORECAST_REFRESH_TICKS) {
-            self.refresh_forecast();
+        if data_updated {
+            self.tick_count = self.tick_count.wrapping_add(1);
+
+            self.history.record(
+                self.battery.charge_percent(),
+                self.power.total_power_watts(),
+            );
+
+            if self.tick_count.is_multiple_of(FORECAST_REFRESH_TICKS) {
+                self.refresh_forecast();
+            }
         }
 
         Ok(())
     }
 
-    fn tick_from_daemon(&mut self) -> Result<()> {
+    fn tick_from_daemon(&mut self) -> Result<bool> {
         let mut received_data = false;
 
         if let Some(ref mut client) = self.daemon_subscription {
             match client.read_update() {
                 Ok(Some(snapshot)) => {
+                    debug!("Received daemon snapshot");
                     self.apply_snapshot(&snapshot);
                     self.last_snapshot = Some(snapshot);
                     self.last_daemon_update = Some(std::time::Instant::now());
@@ -383,8 +400,8 @@ impl App {
                     received_data = true;
                 }
                 Ok(None) => {}
-                Err(_) => {
-                    debug!("Daemon connection lost");
+                Err(e) => {
+                    debug!(error = %e, "Daemon connection lost");
                     self.daemon_subscription = None;
                     self.daemon_connected = false;
                     self.attempt_reconnect();
@@ -404,9 +421,10 @@ impl App {
 
         if !self.using_daemon_data {
             self.tick_from_local()?;
+            return Ok(true);
         }
 
-        Ok(())
+        Ok(received_data)
     }
 
     fn attempt_reconnect(&mut self) {
@@ -467,6 +485,12 @@ impl App {
         if !self.selection_mode {
             self.processes
                 .update_from_snapshots(snapshot.processes.clone());
+        }
+    }
+
+    fn sync_daemon_broadcast_interval(&self) {
+        if let Ok(mut client) = DaemonClient::connect() {
+            let _ = client.set_broadcast_interval(self.refresh_ms);
         }
     }
 
@@ -702,6 +726,7 @@ impl App {
                     self.config.user_config.refresh_ms = self.refresh_ms;
                     let _ = self.config.user_config.save();
                 }
+                self.sync_daemon_broadcast_interval();
             }
             Action::DecreaseRefreshRate => {
                 self.refresh_ms = self
@@ -712,6 +737,7 @@ impl App {
                     self.config.user_config.refresh_ms = self.refresh_ms;
                     let _ = self.config.user_config.save();
                 }
+                self.sync_daemon_broadcast_interval();
             }
             Action::OpenThemeImporter => {
                 self.open_theme_importer();
@@ -1129,6 +1155,7 @@ impl App {
                     self.config.user_config.refresh_ms = self.refresh_ms;
                     let _ = self.config.user_config.save();
                 }
+                self.sync_daemon_broadcast_interval();
             }
             "Process Count" => {
                 self.config.user_config.process_count =
@@ -1192,6 +1219,7 @@ impl App {
                     self.config.user_config.refresh_ms = self.refresh_ms;
                     let _ = self.config.user_config.save();
                 }
+                self.sync_daemon_broadcast_interval();
             }
             "Process Count" => {
                 self.config.user_config.process_count = self
