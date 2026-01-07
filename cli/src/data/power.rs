@@ -725,10 +725,16 @@ impl PowerData {
             system_power: snapshot.total_power_watts,
         };
 
-        if self.samples.len() >= SMOOTHING_SAMPLE_COUNT {
-            self.samples.pop_front();
+        if self.samples.is_empty() {
+            for _ in 0..MIN_WARMUP_SAMPLES {
+                self.samples.push_back(sample);
+            }
+        } else {
+            if self.samples.len() >= SMOOTHING_SAMPLE_COUNT {
+                self.samples.pop_front();
+            }
+            self.samples.push_back(sample);
         }
-        self.samples.push_back(sample);
     }
 }
 

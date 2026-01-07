@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ pub type Result<T> = std::result::Result<T, ClientError>;
 
 pub struct DaemonClient {
     stream: UnixStream,
+    read_buffer: Vec<u8>,
 }
 
 impl DaemonClient {
@@ -36,7 +37,63 @@ impl DaemonClient {
         let stream = UnixStream::connect(&path)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            read_buffer: Vec::with_capacity(64 * 1024),
+        })
+    }
+
+    fn read_line_blocking(&mut self) -> Result<String> {
+        let mut temp_buf = [0u8; 8192];
+        loop {
+            if let Some(pos) = self.read_buffer.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = self.read_buffer.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes).to_string();
+                return Ok(line);
+            }
+            let n = self.stream.read(&mut temp_buf)?;
+            if n == 0 {
+                return Err(ClientError::Protocol("Connection closed".into()));
+            }
+            self.read_buffer.extend_from_slice(&temp_buf[..n]);
+        }
+    }
+
+    fn read_line_nonblocking(&mut self) -> Result<Option<String>> {
+        let mut temp_buf = [0u8; 8192];
+        loop {
+            if let Some(pos) = self.read_buffer.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = self.read_buffer.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes).to_string();
+                tracing::trace!(
+                    line_len = line.len(),
+                    buffer_remaining = self.read_buffer.len(),
+                    "read_line_nonblocking: found complete line"
+                );
+                return Ok(Some(line));
+            }
+            match self.stream.read(&mut temp_buf) {
+                Ok(0) => {
+                    tracing::debug!("read_line_nonblocking: connection closed (read 0 bytes)");
+                    return Err(ClientError::Protocol("Connection closed".into()));
+                }
+                Ok(n) => {
+                    tracing::trace!(bytes_read = n, "read_line_nonblocking: read data");
+                    self.read_buffer.extend_from_slice(&temp_buf[..n]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tracing::trace!(
+                        buffer_len = self.read_buffer.len(),
+                        "read_line_nonblocking: would block"
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "read_line_nonblocking: read error");
+                    return Err(ClientError::Connection(e));
+                }
+            }
+        }
     }
 
     fn send_request(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
@@ -47,9 +104,8 @@ impl DaemonClient {
         writeln!(self.stream, "{}", json)?;
         self.stream.flush()?;
 
-        let mut reader = BufReader::new(&self.stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
+        let line = self.read_line_blocking()?;
+        tracing::debug!(line_len = line.len(), "send_request read response");
 
         DaemonResponse::from_json(&line).map_err(|e| ClientError::Protocol(e.to_string()))
     }
@@ -144,6 +200,14 @@ impl DaemonClient {
         }
     }
 
+    pub fn set_broadcast_interval(&mut self, interval_ms: u64) -> Result<()> {
+        match self.send_request(DaemonRequest::SetBroadcastInterval { interval_ms })? {
+            DaemonResponse::Ok => Ok(()),
+            DaemonResponse::Error(e) => Err(ClientError::Daemon(e)),
+            _ => Err(ClientError::Protocol("Unexpected response".into())),
+        }
+    }
+
     #[allow(dead_code)]
     pub fn unsubscribe(&mut self) -> Result<()> {
         match self.send_request(DaemonRequest::Unsubscribe)? {
@@ -155,28 +219,48 @@ impl DaemonClient {
 
     #[allow(dead_code)]
     pub fn read_update(&mut self) -> Result<Option<DataSnapshot>> {
-        let mut reader = BufReader::new(&self.stream);
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => Ok(None),
-            Ok(_) => {
-                let response = DaemonResponse::from_json(&line)
-                    .map_err(|e| ClientError::Protocol(e.to_string()))?;
+        match self.read_line_nonblocking()? {
+            None => Ok(None),
+            Some(line) => {
+                tracing::debug!(line_len = line.len(), "read_update: got line");
+                let response = match DaemonResponse::from_json(&line) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let start: String = line.chars().take(50).collect();
+                        let end: String = line
+                            .chars()
+                            .rev()
+                            .take(50)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
+                        tracing::error!(
+                            error = %e,
+                            line_len = line.len(),
+                            start = %start,
+                            end = %end,
+                            "JSON parse failed"
+                        );
+                        return Err(ClientError::Protocol(e.to_string()));
+                    }
+                };
                 match response {
                     DaemonResponse::DataUpdate(snapshot) => Ok(Some(snapshot)),
                     DaemonResponse::Error(e) => Err(ClientError::Daemon(e)),
                     _ => Ok(None),
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(None),
-            Err(e) => Err(ClientError::Connection(e)),
         }
     }
 
     #[allow(dead_code)]
-    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+    pub fn set_nonblocking(&mut self, nonblocking: bool) -> Result<()> {
         self.stream.set_nonblocking(nonblocking)?;
+        if nonblocking {
+            self.stream.set_read_timeout(None)?;
+            self.stream.set_write_timeout(None)?;
+        }
         Ok(())
     }
 }
