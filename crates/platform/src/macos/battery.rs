@@ -1,14 +1,14 @@
 use std::process::Command;
 use std::time::Duration;
 
-use battery::units::electric_potential::millivolt;
-use battery::units::energy::watt_hour;
-use battery::units::power::watt;
-use battery::units::ratio::percent;
-use battery::units::thermodynamic_temperature::degree_celsius;
-use battery::units::time::second;
-use battery::Manager;
 use color_eyre::eyre::{eyre, Result};
+use starship_battery::units::electric_potential::millivolt;
+use starship_battery::units::energy::watt_hour;
+use starship_battery::units::power::watt;
+use starship_battery::units::ratio::percent;
+use starship_battery::units::thermodynamic_temperature::degree_celsius;
+use starship_battery::units::time::second;
+use starship_battery::Manager;
 
 use crate::battery::{BatteryInfo, BatteryProvider};
 use crate::types::{BatteryTechnology, ChargeState};
