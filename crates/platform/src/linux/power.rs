@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ struct PowerSample {
 #[derive(Debug)]
 struct RaplDomain {
     path: PathBuf,
-    name: String,
+    _name: String,
     last_energy_uj: u64,
     last_time: Instant,
 }
@@ -185,7 +185,7 @@ fn discover_rapl_domains() -> Vec<RaplDomain> {
 
                     domains.push(RaplDomain {
                         path,
-                        name,
+                        _name: name,
                         last_energy_uj,
                         last_time: Instant::now(),
                     });

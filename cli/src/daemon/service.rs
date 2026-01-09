@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::{eyre, Result};
 
-const SERVICE_LABEL: &str = "com.jolt.daemon";
+#[cfg(target_os = "macos")]
+const SERVICE_LABEL: &str = "sh.getjolt.daemon";
 
 #[derive(Debug, Clone)]
 pub struct ServiceStatus {
@@ -593,7 +594,7 @@ mod tests {
     fn test_macos_plist_path() {
         let path = macos_plist_path();
         assert!(path.to_string_lossy().contains("LaunchAgents"));
-        assert!(path.to_string_lossy().contains("com.jolt.daemon.plist"));
+        assert!(path.to_string_lossy().contains("sh.getjolt.daemon.plist"));
     }
 
     #[cfg(target_os = "macos")]
@@ -601,7 +602,7 @@ mod tests {
     fn test_generate_macos_plist() {
         let exe = PathBuf::from("/usr/local/bin/jolt");
         let plist = generate_macos_plist(&exe);
-        assert!(plist.contains("com.jolt.daemon"));
+        assert!(plist.contains("sh.getjolt.daemon"));
         assert!(plist.contains("/usr/local/bin/jolt"));
         assert!(plist.contains("RunAtLoad"));
         assert!(plist.contains("KeepAlive"));
