@@ -92,9 +92,9 @@ impl LinuxBattery {
     fn refresh_linux_extras(&mut self) {
         self.info.external_connected = is_ac_connected();
 
-        if let Some(ref path) = self.battery_path {
-            self.detect_not_charging_state(path);
-            self.read_amperage(path);
+        if let Some(path) = self.battery_path.clone() {
+            self.detect_not_charging_state(&path);
+            self.read_amperage(&path);
         }
     }
 
