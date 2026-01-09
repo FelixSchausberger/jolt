@@ -16,7 +16,7 @@ Yes! jolt supports Linux with the same features as macOS:
 - ✅ Process list with CPU usage
 - ✅ All TUI features
 
-**Note:** Power metrics on Linux require permissions. See [installation guide](/jolt/docs/installation/#linux-permissions).
+**Note:** Power metrics on Linux require permissions. See [installation guide](/docs/installation/#linux-permissions).
 
 ### Does jolt work on Intel Macs?
 
@@ -92,7 +92,7 @@ Intel Macs cannot report per-component power consumption.
 1. Intel or AMD CPU with RAPL support (kernel 3.13+)
 2. Proper permissions configured
 
-See the [installation guide](/jolt/docs/installation/#linux-permissions) for Linux setup.
+See the [installation guide](/docs/installation/#linux-permissions) for Linux setup.
 
 ### What does "Not Charging" mean?
 

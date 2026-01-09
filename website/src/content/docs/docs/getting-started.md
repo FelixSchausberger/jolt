@@ -48,4 +48,4 @@ Power metrics require Apple Silicon on macOS or RAPL support on Linux.
 
 ## Next Steps
 
-Ready to get started? Head to [Installation](/jolt/docs/installation/) to set up jolt on your system.
+Ready to get started? Head to [Installation](/docs/installation/) to set up jolt on your system.

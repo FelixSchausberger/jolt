@@ -4,7 +4,7 @@ import starlight from '@astrojs/starlight'
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://jordond.github.io',
+  site: 'https://getjolt.sh',
   base: '/',
   integrations: [
     starlight({

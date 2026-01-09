@@ -8,12 +8,12 @@ import InstallTabs from '../components/InstallTabs.astro'
   description="A beautiful terminal-based battery and energy monitor for macOS and Linux"
 >
   <header class="header">
-    <a href="/jolt/" class="logo">
-      <img src="/jolt/favicon.svg" alt="" width="28" height="28" />
+    <a href="/" class="logo">
+      <img src="/favicon.svg" alt="" width="28" height="28" />
       <span>jolt</span>
     </a>
     <nav class="nav">
-      <a href="/jolt/docs/getting-started/" class="nav-button">Documentation</a>
+      <a href="/docs/getting-started/" class="nav-button">Documentation</a>
       <a
         href="https://github.com/jordond/jolt"
         target="_blank"
@@ -119,11 +119,11 @@ import InstallTabs from '../components/InstallTabs.astro'
   <footer class="footer">
     <div class="footer-content">
       <div class="footer-brand">
-        <img src="/jolt/favicon.svg" alt="" width="24" height="24" />
+        <img src="/favicon.svg" alt="" width="24" height="24" />
         <span>jolt</span>
       </div>
       <div class="footer-links">
-        <a href="/jolt/docs/getting-started/">Docs</a>
+        <a href="/docs/getting-started/">Docs</a>
         <a href="https://github.com/jordond/jolt">GitHub</a>
         <a href="https://github.com/jordond/jolt/issues">Issues</a>
       </div>
@@ -587,7 +587,7 @@ import InstallTabs from '../components/InstallTabs.astro'
 
     let currentSection = 0
     sections.forEach((id, index) => {
-      const el = document.querySelector(id === 'hero' ? '.hero' : `#${id}`)
+      const el = document.querySelector(id === 'hero' ? '.hero' : `#${id}`) as HTMLElement | null
       if (el && scrollY >= el.offsetTop - windowHeight / 2) {
         currentSection = index
       }

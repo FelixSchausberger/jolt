@@ -7,7 +7,7 @@ This guide will get you up and running with jolt in under 5 minutes.
 
 ## Launch jolt
 
-After [installation](/jolt/docs/installation/), simply run:
+After [installation](/docs/installation/), simply run:
 
 ```bash
 jolt
@@ -23,7 +23,7 @@ You'll see the main TUI interface with:
 :::tip[Platform Note]
 All features work the same on macOS and Linux. Power metrics require:
 - macOS: Apple Silicon (M1/M2/M3/M4)
-- Linux: RAPL permissions ([setup guide](/jolt/docs/installation/#linux-permissions))
+- Linux: RAPL permissions ([setup guide](/docs/installation/#linux-permissions))
 :::
 
 ## Basic Navigation
@@ -102,6 +102,6 @@ jolt --low-power
 
 ## Next Steps
 
-- Learn about the [TUI Interface](/jolt/docs/tui-interface/) in detail
-- See all [Keyboard Shortcuts](/jolt/docs/keyboard-shortcuts/)
-- Configure jolt with the [Config File](/jolt/docs/configuration/)
+- Learn about the [TUI Interface](/docs/tui-interface/) in detail
+- See all [Keyboard Shortcuts](/docs/keyboard-shortcuts/)
+- Configure jolt with the [Config File](/docs/configuration/)

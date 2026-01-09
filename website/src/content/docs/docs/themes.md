@@ -137,7 +137,7 @@ impact_high = "#ff5555"
 
 ## Creating Custom Themes
 
-See [Custom Themes](/jolt/docs/custom-themes/) for a complete guide on creating your own themes.
+See [Custom Themes](/docs/custom-themes/) for a complete guide on creating your own themes.
 
 ## Theme Validation
 

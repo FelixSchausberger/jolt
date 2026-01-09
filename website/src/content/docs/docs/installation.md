@@ -92,7 +92,7 @@ jolt
 
 ## Linux Setup
 
-On Linux, you'll need to grant permissions for power metrics. See the [Linux Permissions](#linux-permissions) section below or the [Troubleshooting](/jolt/docs/troubleshooting/) page.
+On Linux, you'll need to grant permissions for power metrics. See the [Linux Permissions](#linux-permissions) section below or the [Troubleshooting](/docs/troubleshooting/) page.
 
 ### Linux Permissions
 
@@ -134,4 +134,4 @@ For detailed Linux setup information, see [docs/linux-setup.md](https://github.c
 
 ## Next Steps
 
-Continue to [Quick Start](/jolt/docs/quick-start/) for a 5-minute tour of jolt's features.
+Continue to [Quick Start](/docs/quick-start/) for a 5-minute tour of jolt's features.

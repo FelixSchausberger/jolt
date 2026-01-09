@@ -7,7 +7,7 @@ jolt can track battery and power data over time, enabling analysis of usage patt
 
 ## Enabling History
 
-History collection requires the [daemon](/jolt/docs/daemon/) to be running:
+History collection requires the [daemon](/docs/daemon/) to be running:
 
 ```bash
 jolt daemon start

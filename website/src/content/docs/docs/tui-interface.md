@@ -52,7 +52,7 @@ Real-time power consumption metrics:
 :::note
 Power metrics require:
 - **macOS:** Apple Silicon (M1/M2/M3/M4). Intel Macs will show battery data only.
-- **Linux:** RAPL support with proper permissions. See [installation guide](/jolt/docs/installation/#linux-permissions).
+- **Linux:** RAPL support with proper permissions. See [installation guide](/docs/installation/#linux-permissions).
 :::
 
 ## Process List

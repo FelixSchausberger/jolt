@@ -50,7 +50,7 @@ import Default from '@astrojs/starlight/components/Header.astro'
 
     if (isHeroPage && rightGroup && !document.querySelector('.landing-docs-link')) {
       const docsLink = document.createElement('a')
-      docsLink.href = '/jolt/docs/getting-started/'
+      docsLink.href = '/docs/getting-started/'
       docsLink.className = 'landing-docs-link'
       docsLink.textContent = 'Documentation'
       rightGroup.insertBefore(docsLink, rightGroup.firstChild)

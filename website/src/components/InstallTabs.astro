@@ -44,7 +44,6 @@
 
   <div class="tab-panels">
     <div class="tab-content active" id="panel-install" role="tabpanel" aria-labelledby="install">
-      <p class="platform-note">Automatically detects macOS or Linux</p>
       <div class="code-block">
         <pre><code>curl -fsSL https://getjolt.sh/install.sh | bash</code></pre>
         <button
@@ -152,21 +151,24 @@ cd jolt && cargo build --release
 </div>
 
 <script>
-  const panels = document.querySelector('.tab-panels')
+  const panels = document.querySelector('.tab-panels') as HTMLElement | null
   const contents = document.querySelectorAll('.tab-content')
 
   function updateHeight() {
-    const active = document.querySelector('.tab-content.active .code-block')
+    const active = document.querySelector('.tab-content.active') as HTMLElement | null
     if (active && panels) {
-      panels.style.height = active.offsetHeight + 'px'
+      panels.style.height = active.scrollHeight + 'px'
     }
   }
 
   updateHeight()
 
+  // Recalculate on window resize
+  window.addEventListener('resize', updateHeight)
+
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab
+      const tab = (btn as HTMLElement).dataset.tab
 
       document.querySelectorAll('.tab-btn').forEach((b) => {
         b.classList.remove('active')
@@ -176,16 +178,15 @@ cd jolt && cargo build --release
 
       btn.classList.add('active')
       btn.setAttribute('aria-selected', 'true')
-      document.getElementById(`panel-${tab}`).classList.add('active')
-
-      updateHeight()
+      document.getElementById(`panel-${tab}`)?.classList.add('active')
+      setTimeout(updateHeight, 10)
     })
   })
 
   document.querySelectorAll('.copy-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const code = btn.dataset.code
-      await navigator.clipboard.writeText(code)
+      const code = (btn as HTMLElement).dataset.code
+      await navigator.clipboard.writeText(code || '')
 
       btn.classList.add('copied')
       setTimeout(() => btn.classList.remove('copied'), 2000)
@@ -234,7 +235,6 @@ cd jolt && cargo build --release
     position: relative;
     background: var(--sl-color-bg-sidebar, #12121a);
     border: 1px solid rgba(229, 255, 0, 0.2);
-    border-top: none;
     border-radius: 0 0 0.5rem 0.5rem;
     overflow: hidden;
     transition: height 0.25s ease-out;
@@ -246,6 +246,9 @@ cd jolt && cargo build --release
     opacity: 0;
     transition: opacity 0.2s ease-out;
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
 
   .tab-content.active {
