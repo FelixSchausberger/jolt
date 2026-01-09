@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use color_eyre::eyre::{eyre, Result};
 use starship_battery::units::electric_potential::millivolt;
 use starship_battery::units::energy::watt_hour;
 use starship_battery::units::power::watt;
@@ -9,7 +10,6 @@ use starship_battery::units::ratio::percent;
 use starship_battery::units::thermodynamic_temperature::degree_celsius;
 use starship_battery::units::time::second;
 use starship_battery::Manager;
-use color_eyre::eyre::{eyre, Result};
 
 use crate::battery::{BatteryInfo, BatteryProvider};
 use crate::types::{BatteryTechnology, ChargeState};

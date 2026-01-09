@@ -33,12 +33,23 @@ impl App {
                 self.handle_process_action(action)
             }
             // Theme
-            CycleAppearance | OpenThemePicker | CloseThemePicker | SelectTheme
-            | TogglePreviewAppearance | ToggleGraphView => self.handle_theme_action(action),
+            CycleAppearance
+            | OpenThemePicker
+            | CloseThemePicker
+            | SelectTheme
+            | TogglePreviewAppearance
+            | ToggleGraphView => self.handle_theme_action(action),
             // Theme importer
-            OpenThemeImporter | CloseThemeImporter | ImporterToggleSelect | ImporterPreview
-            | ImporterImport | ImporterRefresh | ImporterToggleSearch | ImporterFilterChar(_)
-            | ImporterFilterBackspace | ImporterClearFilter => self.handle_importer_action(action),
+            OpenThemeImporter
+            | CloseThemeImporter
+            | ImporterToggleSelect
+            | ImporterPreview
+            | ImporterImport
+            | ImporterRefresh
+            | ImporterToggleSearch
+            | ImporterFilterChar(_)
+            | ImporterFilterBackspace
+            | ImporterClearFilter => self.handle_importer_action(action),
             // History
             HistoryPrevPeriod | HistoryNextPeriod => self.handle_history_action(action),
             // Settings

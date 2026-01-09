@@ -110,7 +110,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
         ),
         format_header("Name", SortColumn::Name, app.sort_column, sort_indicator),
         format_header("CPU%", SortColumn::Cpu, app.sort_column, sort_indicator),
-        format_header("Memory", SortColumn::Memory, app.sort_column, sort_indicator),
+        format_header(
+            "Memory",
+            SortColumn::Memory,
+            app.sort_column,
+            sort_indicator,
+        ),
         "Disk".to_string(),
         "Runtime".to_string(),
         "CPU".to_string(),
