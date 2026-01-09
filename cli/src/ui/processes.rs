@@ -110,11 +110,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
         ),
         format_header("Name", SortColumn::Name, app.sort_column, sort_indicator),
         format_header("CPU%", SortColumn::Cpu, app.sort_column, sort_indicator),
-        format_header("Mem", SortColumn::Memory, app.sort_column, sort_indicator),
+        format_header("Memory", SortColumn::Memory, app.sort_column, sort_indicator),
         "Disk".to_string(),
-        "Run".to_string(),
+        "Runtime".to_string(),
         "CPU".to_string(),
-        "K".to_string(),
+        "Kill".to_string(),
     ];
     let header = Row::new(header_cells.iter().map(|h| {
         Span::styled(
@@ -139,7 +139,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
         .enumerate()
         .map(|(idx, (process, depth))| {
             let actual_idx = idx + app.process_scroll_offset;
-            let is_selected = actual_idx == app.selected_process_index;
+            let is_selected = app.selection_mode && actual_idx == app.selected_process_index;
             let has_children = process.children.is_some();
             let is_expanded = app.expanded_groups.contains(&process.pid);
 
