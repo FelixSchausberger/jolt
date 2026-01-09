@@ -91,6 +91,7 @@ pub struct App {
     pub(crate) reconnect_attempts: u32,
     pub(crate) last_reconnect_attempt: Option<std::time::Instant>,
     last_theme_check: std::time::Instant,
+    pub(crate) snapshot_rx: Option<std::sync::mpsc::Receiver<DataSnapshot>>,
 }
 
 impl App {
@@ -169,6 +170,7 @@ impl App {
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
             last_theme_check: std::time::Instant::now(),
+            snapshot_rx: None,
         };
 
         app.try_connect_daemon();
@@ -337,17 +339,18 @@ impl App {
     /// This optionally shuts down the daemon if background recording is disabled,
     /// and unsubscribes from daemon updates.
     pub fn cleanup(&mut self) {
-        if !self.config.user_config.history.background_recording {
-            if let Some(ref mut client) = self.daemon_subscription {
+        // Drop the snapshot receiver to signal background thread to exit
+        self.snapshot_rx = None;
+
+        // Connect with a new client for cleanup operations
+        if let Ok(mut client) = DaemonClient::connect() {
+            if !self.config.user_config.history.background_recording {
                 let _ = client.shutdown();
-            } else if let Ok(mut client) = DaemonClient::connect() {
-                let _ = client.shutdown();
+            } else {
+                let _ = client.unsubscribe();
             }
         }
 
-        if let Some(ref mut client) = self.daemon_subscription {
-            let _ = client.unsubscribe();
-        }
         self.daemon_subscription = None;
     }
 }

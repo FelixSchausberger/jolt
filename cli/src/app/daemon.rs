@@ -44,7 +44,35 @@ impl App {
         if let Ok(mut client) = DaemonClient::connect() {
             if client.subscribe().is_ok() && client.set_nonblocking(true).is_ok() {
                 info!("Subscribed to daemon for real-time data");
-                self.daemon_subscription = Some(client);
+
+                // Create channel for background thread to send snapshots
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.snapshot_rx = Some(rx);
+
+                // Spawn background thread to continuously read from socket
+                std::thread::spawn(move || {
+                    debug!("Background daemon reader thread started");
+                    let mut client = client;
+                    loop {
+                        match client.read_update() {
+                            Ok(Some(snapshot)) => {
+                                if tx.send(snapshot).is_err() {
+                                    debug!("Channel closed, reader thread exiting");
+                                    break;
+                                }
+                            }
+                            Ok(None) => {
+                                // No data available, sleep briefly to avoid busy loop
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            Err(e) => {
+                                debug!(error = %e, "Background reader connection lost");
+                                break;
+                            }
+                        }
+                    }
+                });
+
                 self.using_daemon_data = true;
                 self.daemon_connected = true;
                 self.sync_daemon_broadcast_interval();
@@ -62,14 +90,24 @@ impl App {
             return false;
         };
 
+        let log_level = self.config.user_config.log_level;
+        let log_level_str = match log_level {
+            crate::config::LogLevel::Off => "off",
+            crate::config::LogLevel::Error => "error",
+            crate::config::LogLevel::Warn => "warn",
+            crate::config::LogLevel::Info => "info",
+            crate::config::LogLevel::Debug => "debug",
+            crate::config::LogLevel::Trace => "trace",
+        };
+
         match std::process::Command::new(&exe)
-            .args(["daemon", "start"])
+            .args(["daemon", "--log-level", log_level_str, "start"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
         {
             Ok(_) => {
-                debug!("Daemon spawn initiated");
+                debug!(log_level = log_level_str, "Daemon spawn initiated");
                 true
             }
             Err(e) => {
@@ -93,7 +131,7 @@ impl App {
 
     /// Checks if the app is currently attempting to reconnect to the daemon.
     pub fn is_reconnecting(&self) -> bool {
-        self.using_daemon_data && self.daemon_subscription.is_none() && self.reconnect_attempts > 0
+        self.using_daemon_data && self.snapshot_rx.is_none() && self.reconnect_attempts > 0
     }
 
     /// Reads data from the daemon subscription.
@@ -103,42 +141,43 @@ impl App {
         let mut received_data = false;
         let read_start = std::time::Instant::now();
 
-        if let Some(ref mut client) = self.daemon_subscription {
-            match client.read_update() {
-                Ok(Some(snapshot)) => {
-                    let read_duration = read_start.elapsed();
+        // Check if we have a channel receiver from background thread
+        if let Some(ref rx) = self.snapshot_rx {
+            // Drain all available snapshots, keeping only the latest
+            let mut latest_snapshot = None;
+            let mut snapshots_drained = 0;
+            while let Ok(snapshot) = rx.try_recv() {
+                latest_snapshot = Some(snapshot);
+                snapshots_drained += 1;
+            }
+
+            if let Some(snapshot) = latest_snapshot {
+                let read_duration = read_start.elapsed();
+                debug!(
+                    read_duration_ms = read_duration.as_millis() as u64,
+                    snapshots_drained,
+                    battery_percent = snapshot.battery.charge_percent,
+                    battery_state = %snapshot.battery.state_label,
+                    external_connected = snapshot.battery.external_connected,
+                    power_watts = snapshot.power.total_power_watts,
+                    process_count = snapshot.processes.len(),
+                    "Received daemon snapshot from channel"
+                );
+                self.apply_snapshot(&snapshot);
+                self.last_snapshot = Some(snapshot);
+                self.last_daemon_update = Some(std::time::Instant::now());
+                self.reconnect_attempts = 0;
+                received_data = true;
+            } else {
+                let since_last = self
+                    .last_daemon_update
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                if since_last > 1000 {
                     debug!(
-                        read_duration_ms = read_duration.as_millis() as u64,
-                        battery_percent = snapshot.battery.charge_percent,
-                        battery_state = %snapshot.battery.state_label,
-                        external_connected = snapshot.battery.external_connected,
-                        power_watts = snapshot.power.total_power_watts,
-                        process_count = snapshot.processes.len(),
-                        "Received daemon snapshot"
+                        since_last_update_ms = since_last,
+                        "No daemon data received (waiting)"
                     );
-                    self.apply_snapshot(&snapshot);
-                    self.last_snapshot = Some(snapshot);
-                    self.last_daemon_update = Some(std::time::Instant::now());
-                    self.reconnect_attempts = 0;
-                    received_data = true;
-                }
-                Ok(None) => {
-                    let since_last = self
-                        .last_daemon_update
-                        .map(|t| t.elapsed().as_millis() as u64)
-                        .unwrap_or(0);
-                    if since_last > 1000 {
-                        debug!(
-                            since_last_update_ms = since_last,
-                            "No daemon data received (waiting)"
-                        );
-                    }
-                }
-                Err(e) => {
-                    debug!(error = %e, "Daemon connection lost");
-                    self.daemon_subscription = None;
-                    self.daemon_connected = false;
-                    self.attempt_reconnect();
                 }
             }
         }
@@ -151,7 +190,8 @@ impl App {
                         elapsed_secs = elapsed.as_secs(),
                         "No daemon data for 5s, attempting reconnect"
                     );
-                    self.daemon_subscription = None;
+                    self.snapshot_rx = None;
+                    self.daemon_connected = false;
                     self.attempt_reconnect();
                 }
             }
