@@ -20,8 +20,9 @@ const COL_DISK: u16 = 9;
 const COL_RUNTIME: u16 = 7;
 const COL_CPUTIME: u16 = 7;
 const COL_KILL: u16 = 4;
-const COL_SPACING: u16 = 10;
-const COL_NAME_MIN: u16 = 15;
+const COL_SPACING: u16 = 12;
+const COL_NAME_MIN: u16 = 12;
+const COL_COMMAND_MIN: u16 = 15;
 
 fn energy_gradient_color(energy: f32, theme: &ThemeColors) -> Color {
     let (low_r, low_g, low_b) = extract_rgb(theme.success);
@@ -95,10 +96,34 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
         + COL_IMPACT
         + COL_KILL
         + COL_SPACING;
-    let name_width = inner.width.saturating_sub(fixed_width).max(COL_NAME_MIN) as usize;
+    let flex_width = inner.width.saturating_sub(fixed_width);
+    let name_base = (flex_width / 6).max(COL_NAME_MIN);
+    let command_base = flex_width
+        .saturating_sub(flex_width / 6)
+        .max(COL_COMMAND_MIN);
 
+    // Ensure the total flexible column width does not exceed the available flex_width.
+    // When space is tight, scale the Name and Command columns proportionally so that
+    // name_width + command_width <= flex_width.
+    let (name_width, command_width) = {
+        let total_flex = name_base.saturating_add(command_base);
+        if flex_width == 0 || total_flex <= flex_width {
+            (name_base as usize, command_base as usize)
+        } else {
+            // Scale proportionally using u32 to avoid overflow during multiplication.
+            let fw = flex_width as u32;
+            let total = total_flex as u32;
+            let name_scaled = ((u32::from(name_base) * fw) / total).max(1) as u16;
+            let mut command_scaled = flex_width.saturating_sub(name_scaled);
+            if command_scaled == 0 {
+                // Ensure Command also gets at least 1 cell when there is space.
+                command_scaled = 1;
+            }
+            (name_scaled as usize, command_scaled as usize)
+        }
+    };
     let sort_indicator = if app.sort_ascending { "▲" } else { "▼" };
-    let header_cells: [String; 11] = [
+    let header_cells: [String; 12] = [
         "".to_string(),
         format_header("PID", SortColumn::Pid, app.sort_column, sort_indicator),
         "S".to_string(),
@@ -109,6 +134,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
             sort_indicator,
         ),
         format_header("Name", SortColumn::Name, app.sort_column, sort_indicator),
+        "Command".to_string(),
         format_header("CPU%", SortColumn::Cpu, app.sort_column, sort_indicator),
         format_header(
             "Memory",
@@ -208,6 +234,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
                 Span::styled(status_char, status_style),
                 Span::styled(format!("{:.1}", process.energy_impact), style),
                 Span::styled(truncate_name(display_name, name_width), style),
+                Span::styled(truncate_name(&process.command_args, command_width), style),
                 Span::styled(format!("{:.1}", process.cpu_usage), style),
                 Span::styled(format_memory(process.memory_mb), style),
                 Span::styled(disk_io, style),
@@ -225,7 +252,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
         Constraint::Length(COL_PID),
         Constraint::Length(COL_STATUS),
         Constraint::Length(COL_IMPACT),
-        Constraint::Min(COL_NAME_MIN),
+        Constraint::Length(name_width as u16),
+        Constraint::Length(command_width as u16),
         Constraint::Length(COL_CPU),
         Constraint::Length(COL_MEMORY),
         Constraint::Length(COL_DISK),
