@@ -56,6 +56,7 @@ jobs:
       - name: Update version from tag
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "Updating version to ${VERSION}"
           sed -i.bak 's/^version = ".*"/version = "'"${VERSION}"'"/' Cargo.toml
