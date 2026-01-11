@@ -32,12 +32,12 @@ detect_os() {
     local os
     os="$(uname -s)"
     case "${os}" in
-        Linux*)     echo "linux";;
-        Darwin*)    echo "darwin";;
-        *)
-            log_error "Unsupported operating system: ${os}"
-            exit 1
-            ;;
+    Linux*) echo "linux" ;;
+    Darwin*) echo "darwin" ;;
+    *)
+        log_error "Unsupported operating system: ${os}"
+        exit 1
+        ;;
     esac
 }
 
@@ -45,13 +45,13 @@ detect_arch() {
     local arch
     arch="$(uname -m)"
     case "${arch}" in
-        x86_64)     echo "x86_64";;
-        aarch64)    echo "aarch64";;
-        arm64)      echo "aarch64";;
-        *)
-            log_error "Unsupported architecture: ${arch}"
-            exit 1
-            ;;
+    x86_64) echo "x86_64" ;;
+    aarch64) echo "aarch64" ;;
+    arm64) echo "aarch64" ;;
+    *)
+        log_error "Unsupported architecture: ${arch}"
+        exit 1
+        ;;
     esac
 }
 
@@ -108,7 +108,7 @@ get_latest_version_with_assets() {
                 return 0
             fi
         fi
-    done <<< "${tags}"
+    done <<<"${tags}"
 
     log_error "No releases with assets found"
     return 1
@@ -136,7 +136,7 @@ build_download_info() {
         fi
     fi
 
-    local filename="${BINARY_NAME}-${arch}-${target}"
+    local filename="${BINARY_NAME}-${version}-${arch}-${target}"
     local url="https://github.com/${REPO}/releases/download/${version}/${filename}"
     local checksum_url="${url}.sha256"
 
@@ -246,7 +246,7 @@ install_jolt() {
 
     local download_info
     download_info="$(build_download_info "${version}" "${os}" "${arch}" "${variant}")"
-    IFS='|' read -r url filename checksum_url <<< "${download_info}"
+    IFS='|' read -r url filename checksum_url <<<"${download_info}"
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -295,15 +295,15 @@ install_jolt() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --prerelease)
-            PRERELEASE=true
-            shift
-            ;;
-        *)
-            log_error "Unknown option: $1"
-            log_error "Usage: $0 [--prerelease]"
-            exit 1
-            ;;
+    --prerelease)
+        PRERELEASE=true
+        shift
+        ;;
+    *)
+        log_error "Unknown option: $1"
+        log_error "Usage: $0 [--prerelease]"
+        exit 1
+        ;;
     esac
 done
 
