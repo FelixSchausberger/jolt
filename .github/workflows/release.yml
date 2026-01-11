@@ -189,26 +189,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish jolt-protocol
-        run: cargo publish -p jolt-protocol --allow-dirty --token ${{ secrets.CRATE_TOKEN }} || true
-
-      - name: Wait for crates.io
-        run: sleep 30
-
-      - name: Publish jolt-theme
-        run: cargo publish -p jolt-theme --allow-dirty --token ${{ secrets.CRATE_TOKEN }} || true
-
-      - name: Wait for crates.io
-        run: sleep 30
-
-      - name: Publish jolt-platform
-        run: cargo publish -p jolt-platform --allow-dirty --token ${{ secrets.CRATE_TOKEN }} || true
-
-      - name: Wait for crates.io
-        run: sleep 30
-
-      - name: Publish jolt-tui
-        run: cargo publish -p jolt-tui --allow-dirty --token ${{ secrets.CRATE_TOKEN }} || true
+      - name: Publish crates
+        uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CRATE_TOKEN }}
+          args: --allow-dirty
 
   update-version:
     name: Update version in main
