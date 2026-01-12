@@ -33,7 +33,9 @@ jobs:
         with:
           filters: |
             rust:
-              - 'cli/**'
+              - '**/*.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             website:
               - 'website/**'
 
