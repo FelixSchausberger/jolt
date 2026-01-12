@@ -1,6 +1,6 @@
 <div align="center">
 
-# jolt
+# ⚡️ jolt
 
 **A terminal-based battery and energy monitor for macOS and Linux.**
 
