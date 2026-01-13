@@ -10,6 +10,8 @@ use crate::app::{App, SortColumn};
 use crate::data::ProcessState;
 use crate::theme::ThemeColors;
 
+use super::utils::format_duration;
+
 const COL_EXPAND: u16 = 6;
 const COL_PID: u16 = 7;
 const COL_STATUS: u16 = 1;
@@ -17,8 +19,8 @@ const COL_IMPACT: u16 = 8;
 const COL_CPU: u16 = 6;
 const COL_MEMORY: u16 = 8;
 const COL_DISK: u16 = 9;
-const COL_RUNTIME: u16 = 7;
-const COL_CPUTIME: u16 = 7;
+const COL_RUNTIME: u16 = 10;
+const COL_CPUTIME: u16 = 10;
 const COL_KILL: u16 = 4;
 const COL_SPACING: u16 = 12;
 const COL_NAME_MIN: u16 = 12;
@@ -73,11 +75,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &ThemeColors)
     let border_color = if app.selection_mode {
         theme.accent
     } else {
-        theme.border
+        theme.muted
     };
 
     let block = Block::default()
-        .title(title)
+        .title(Span::styled(title, Style::default().fg(border_color)))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(theme.bg));
@@ -293,30 +295,6 @@ fn format_disk_io(read_bytes: u64, write_bytes: u64) -> String {
         format!("{:.0}K", total as f64 / 1024.0)
     } else {
         format!("{:.1}M", total as f64 / (1024.0 * 1024.0))
-    }
-}
-
-fn format_duration(secs: u64) -> String {
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        let hours = secs / 3600;
-        let mins = (secs % 3600) / 60;
-        if mins > 0 {
-            format!("{}h{}m", hours, mins)
-        } else {
-            format!("{}h", hours)
-        }
-    } else {
-        let days = secs / 86400;
-        let hours = (secs % 86400) / 3600;
-        if hours > 0 {
-            format!("{}d{}h", days, hours)
-        } else {
-            format!("{}d", days)
-        }
     }
 }
 
