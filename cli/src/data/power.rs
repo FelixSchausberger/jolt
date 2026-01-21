@@ -8,13 +8,21 @@ use crate::daemon::PowerSnapshot;
 pub use jolt_platform::PowerMode;
 
 #[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 type PlatformPower = jolt_platform::macos::MacOSPower;
 
 #[cfg(target_os = "linux")]
+#[cfg(feature = "linux")]
 type PlatformPower = jolt_platform::linux::LinuxPower;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("PlatformPower is only defined for macOS and Linux targets.");
+
+#[cfg(all(target_os = "macos", not(feature = "macos")))]
+compile_error!("macos feature must be enabled when building for macOS target");
+
+#[cfg(all(target_os = "linux", not(feature = "linux")))]
+compile_error!("linux feature must be enabled when building for Linux target");
 
 const SMOOTHING_SAMPLE_COUNT: usize = 5;
 const MIN_WARMUP_SAMPLES: usize = 3;
