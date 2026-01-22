@@ -14,7 +14,7 @@ name = "jolt"
 path = "src/main.rs"
 
 [features]
-default = ["macos"]
+default = []
 macos = ["jolt-platform/macos"]
 linux = ["jolt-platform/linux"]
 
