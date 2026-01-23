@@ -15,8 +15,6 @@ path = "src/main.rs"
 
 [features]
 default = []
-macos = ["jolt-platform/macos"]
-linux = ["jolt-platform/linux"]
 
 [dependencies]
 jolt-protocol = { workspace = true }
